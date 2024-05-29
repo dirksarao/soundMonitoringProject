@@ -1,7 +1,7 @@
 # Surver Room Surveilence System: Phase 1 - Audio Monitoring
 
 DESCRIPTION:
-These are two scripts that contain will be uploaded onto the office and lab NUCs - after some adjustments.
+These are two scripts that will be uploaded onto the office and lab NUCs - after some adjustments.
 
 What does lab.py do?
 - Captures audio from laptop mic
@@ -14,5 +14,6 @@ What does office.py do?
 - Displays processed data with some options for the data format
 
 INSTRUCTIONS:
-Run both scripts by typing the following commands on seperate command line windows:   <python .\lab.py -ab>     and     <python .\office.py>
+Run both scripts by typing the following commands on seperate command line windows:
+<python .\lab.py -ab>     and     <python .\office.py>
 
