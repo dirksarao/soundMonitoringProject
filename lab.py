@@ -70,7 +70,7 @@ def A_weighting(fs):
 
 def rms_flat(a):
     """
-    Return the root mean square of all the elements of *a*, flattened out.
+    Returns the root mean square of all the elements of *a*, flattened out.
     """
     return np.sqrt(np.mean(np.absolute(a)**2))
 
@@ -110,7 +110,7 @@ def data_format(option, audio_data):
         # Convert RMS to dB SPL (Sound Pressure Level)
         db_spl_inst = 20 * np.log10(rms_y)
         
-        if counter2 == 5:
+        if counter2 == 5: #Print every 5 iterations so that the command line doesn't get cluttered too quickly
             print("Instantaneous A-weighted SPL:", db_spl_inst, "dB")
             counter2 = 0
         counter2 += 1
@@ -145,7 +145,7 @@ def plots_init(rate, chunk, duration, data):
     Initialize a waterfall plot and frequency spectrum plot.
 
     Parameters:
-        rate (int): Sampling rate.
+        RATE (int): Sampling rate.
         chunk (int): Size of each audio chunk.
         duration (float): Duration of the plot in seconds.
 
@@ -163,11 +163,10 @@ def plots_init(rate, chunk, duration, data):
     plt.ion()
 
     # PSD plot setup
-    # fig_f, ax_f = plt.subplots()
     ax_f.set_title('Frequency-Domain Signal')
     ax_f.set_xlabel('Frequency (Hz)')
     ax_f.set_ylabel('Power')
-    ax_f.set_ylim(-30, 150)
+    ax_f.set_ylim(-40, 150)
 
     x = np.arange(0, CHUNK)
     y_time = np.zeros(CHUNK)
@@ -178,13 +177,12 @@ def plots_init(rate, chunk, duration, data):
 if __name__ == '__main__':
     """
     Main function to run the simulated design for the lab nuc and sound card. To be edited later.
-    Default is power spectrum
     """
     print("Choosing an option")
     parser = OptionParser()
     
-    parser.add_option("-a", "--aFilter", help='Apply a-filter in time domain', default = False, action = 'store_true')
-    parser.add_option("-f", "--freq", help='Apply a-filter in frequency domain', default = False, action = 'store_true')
+    parser.add_option("-a", "--aFilter", help='Apply a-filter in time domain', default = False, action = 'store_true') # Time-domain implementation
+    parser.add_option("-f", "--freq", help='Apply a-filter in frequency domain', default = False, action = 'store_true')# Frequency domain implementation
     parser.add_option("-p", "--power", help='Display unfiltered power spectrum', default = False, action = 'store_true')
     parser.add_option("-b", "--plot", help='Enable plotting', default = False, action = 'store_true')
 
