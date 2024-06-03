@@ -123,11 +123,6 @@ def data_format(option, audio_data):
 
         data = 10*np.log10(magnitude_spectrum**2)
 
-        if counter2 == 5:
-            print("Instantaneous non-A-weighted SPL:", db_spl_inst, "dB")
-            counter2 = 0
-        counter2 += 1
-
     elif option == 2:
         
         #Perform fft and store single-sided spectrum
@@ -157,6 +152,7 @@ def plots_init(rate, chunk, duration, data):
     data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
     im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=400))
     plt.colorbar(im)
+    ax.set_title('Waterfall')
     ax.set_xlabel('Frequency (Hz)')
     ax.set_ylabel('Time (s)')
 
