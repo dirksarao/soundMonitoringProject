@@ -16,6 +16,9 @@ C_FACTOR = 1 # Calibration factor to be changed when calibration takes place
 POWER = 0
 A_FILTER = 1
 titleReceived = 0
+counter = 0
+ave = 0
+counter2 = 0
 
 #Initialize data buffer
 data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
@@ -51,15 +54,16 @@ def plots_init(rate, chunk, duration, data):
 
     x = np.arange(0, CHUNK)
     y_time = np.zeros(CHUNK)
-    line_f, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
+    line_f1, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
+    line_f2, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
 
-    return fig, ax, ax_f, im, line_f
+    return fig, ax, ax_f, im, line_f1, line_f2
 
 def callback(ch, method, properties, body):
     """
     Callback function for handeling received messages from the message broker.
     """
-    global data, plot_title, ylabel, titleReceived
+    global data, plot_title, ylabel, titleReceived, ave, counter2
 
     # spectrum = np.array(json.loads(body))
     message_data = json.loads(body)
@@ -76,7 +80,7 @@ def callback(ch, method, properties, body):
         im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
 
         # Populate/Update Power vs Frequency Plot
-        line_f.set_data(freq, spectrum)
+        line_f1.set_data(freq, spectrum)
 
         plt.pause(0.05)
         fig.canvas.flush_events()
@@ -91,6 +95,19 @@ def callback(ch, method, properties, body):
         fig.suptitle(plot_title, fontsize=16)
         ax_f.set_ylabel(ylabel)
 
+    # Show history of spectrum with highest peak
+    temp = np.average(spectrum)
+    if (temp > ave):
+        print("temp is bigger than max")
+        ave = temp
+        line_f2.set_data(freq, spectrum)
+
+    if counter2 >= 100:
+        ave = 0
+        counter2 = 0
+
+    counter2 += 1
+
     # # Populate/Update Waterfall Plot
     # data = np.roll(data, -1, axis=0)
     # data[-1, :] = spectrum
@@ -98,7 +115,7 @@ def callback(ch, method, properties, body):
     # im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
 
     # # Populate/Update Power vs Frequency Plot
-    # line_f.set_data(freq, spectrum)
+    # line_f1.set_data(freq, spectrum)
 
     # plt.pause(0.05)
     # fig.canvas.flush_events()
@@ -134,7 +151,7 @@ channel.basic_consume(queue=audioBuffer1,
                       on_message_callback=callback)
 
 #Initialize watefall and spectrum plots
-fig, ax, ax_f, im, line_f = plots_init(RATE, CHUNK, DURATION, data)
+fig, ax, ax_f, im, line_f1, line_f2 = plots_init(RATE, CHUNK, DURATION, data)
 
 # Calculate frequency axis
 freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0:CHUNK//2]

@@ -284,14 +284,6 @@ try:
                 ave = 0
                 counter2 = 0
 
-            # if flag:
-            #     line_f2.set_data(freq, spectrum)
-            #     flag = 0
-
-            # if counter2 >= 20:
-            #     flag = 1
-            #     counter2 = 0
-
             # Populate/Update Waterfall Plot
             data = np.roll(data, -1, axis=0)
             data[-1, :] = spectrum
