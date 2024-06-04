@@ -24,6 +24,8 @@ C_FACTOR = 100 # Calibration factor to be changed when calibration takes place.
 MICROPHONE_SENSITIVITY = 12.1*10**(-3)
 REFERENCE_PRESSURE = 20*10**(-6)
 option = A_FILTER_TIME
+ave = 0
+flag = 1
 
 def a_filter(f_bin):
     """
@@ -173,9 +175,11 @@ def plots_init(rate, chunk, duration, data, data_format):
 
     x = np.arange(0, CHUNK)
     y_time = np.zeros(CHUNK)
-    line_f, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
+    line_f1, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
+    line_f2, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
 
-    return fig, ax, ax_f, im, line_f
+
+    return fig, ax, ax_f, im, line_f1, line_f2
 
 if __name__ == '__main__':
     """
@@ -222,7 +226,7 @@ try:
 
     #Initialize watefall and spectrum plots
     if isPloting:
-        fig, ax, ax_f, im, line_f = plots_init(RATE, CHUNK, DURATION, data, option) #add parameter for data format
+        fig, ax, ax_f, im, line_f1, line_f2 = plots_init(RATE, CHUNK, DURATION, data, option) #add parameter for data format
 
     # Calculate frequency axis
     freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0:CHUNK//2]
@@ -235,6 +239,7 @@ try:
         audio_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
             
         spectrum = data_format(option, audio_data)
+        # spectrum_line2 = data_format(option, audio_data)
 
         # =====================================================================
         # NETWORKING
@@ -265,8 +270,28 @@ try:
         # =====================================================================
         # PLOTS
         # =====================================================================
-        if isPloting and (counter==2):
+        if isPloting and ((counter)==2):
             counter = 0
+
+            # Show history of spectrum with highest peak
+            temp = np.average(spectrum)
+            if (temp > ave):
+                print("temp is bigger than max")
+                ave = temp
+                line_f2.set_data(freq, spectrum)
+
+            if counter2 >= 100:
+                ave = 0
+                counter2 = 0
+
+            # if flag:
+            #     line_f2.set_data(freq, spectrum)
+            #     flag = 0
+
+            # if counter2 >= 20:
+            #     flag = 1
+            #     counter2 = 0
+
             # Populate/Update Waterfall Plot
             data = np.roll(data, -1, axis=0)
             data[-1, :] = spectrum
@@ -275,8 +300,9 @@ try:
             im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
 
             # Populate/Update Power vs Frequency Plot
-            line_f.set_data(freq, spectrum)
+            line_f1.set_data(freq, spectrum)
 
+            counter2 += 1
             plt.pause(0.05)
             fig.canvas.flush_events()
             
