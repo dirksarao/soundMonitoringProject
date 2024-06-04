@@ -135,7 +135,7 @@ def data_format(option, audio_data):
         data = None
     return data
 
-def plots_init(rate, chunk, duration, data):
+def plots_init(rate, chunk, duration, data, data_format):
     """
     Initialize a waterfall plot and frequency spectrum plot.
 
@@ -147,22 +147,29 @@ def plots_init(rate, chunk, duration, data):
     Returns:
         Figure object, axes object for the waterfall plot, axes object for the frequency-domain plot, image object.
     """
+
     # Initialize waterfall plot
     fig, (ax, ax_f) = plt.subplots(1,2,figsize=(12, 5))
     data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
     im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=400))
     plt.colorbar(im)
     ax.set_title('Waterfall')
-    ax.set_xlabel('Frequency (Hz)')
-    ax.set_ylabel('Time (s)')
+    ax.set_xlabel('Frequency [Hz]')
+    ax.set_ylabel('Time [s]')
 
     plt.ion()
 
     # PSD plot setup
-    ax_f.set_title('Frequency-Domain Signal')
-    ax_f.set_xlabel('Frequency (Hz)')
-    ax_f.set_ylabel('Power')
+    ax_f.set_title('SPL vs Frequency')
+    ax_f.set_xlabel('Frequency [Hz]')
     ax_f.set_ylim(-40, 150)
+
+    if data_format==0 or data_format==2:
+        fig.suptitle('A-filtered Spectrum', fontsize=16)  # Set big title
+        ax_f.set_ylabel('[dBA]')
+    elif data_format==1:
+        fig.suptitle('Power Spectrum', fontsize=16)  # Set big title
+        ax_f.set_ylabel('[dB]')
 
     x = np.arange(0, CHUNK)
     y_time = np.zeros(CHUNK)
@@ -204,7 +211,7 @@ try:
     # Networking
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
     channel = connection.channel()
-    channel.queue_declare(queue='audioBuffer')
+    channel.exchange_declare(exchange='log', exchange_type='fanout')
 
     # Initialize PyAudio
     p = pyaudio.PyAudio()
@@ -215,7 +222,7 @@ try:
 
     #Initialize watefall and spectrum plots
     if isPloting:
-        fig, ax, ax_f, im, line_f = plots_init(RATE, CHUNK, DURATION, data)
+        fig, ax, ax_f, im, line_f = plots_init(RATE, CHUNK, DURATION, data, option) #add parameter for data format
 
     # Calculate frequency axis
     freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0:CHUNK//2]
@@ -234,11 +241,26 @@ try:
         # =====================================================================
 
         # Convert NumPy array to Python list and serialize the list to JSON
-        message_body = json.dumps(spectrum.tolist())
 
-        channel.basic_publish(exchange='',
-                            routing_key='audioBuffer',
-                            body=message_body)
+        # Prepare message containing plot titles
+        if option == A_FILTER_TIME or option == A_FILTER_FREQ:
+            plot_title = "A-Filtered Spectrum"
+            ylabel = "[dBA]"
+        elif option == 1:
+            plot_title = "Power Spectrum"
+            ylabel = "[dB]"
+
+        message_body = json.dumps({
+            "spectrum":spectrum.tolist(),
+            "plotTitle": plot_title,
+            "ylabel": ylabel
+        
+        })
+
+        channel.basic_publish(exchange='log',
+                            routing_key='',
+                            body=message_body
+        )
             
         # =====================================================================
         # PLOTS
@@ -262,7 +284,7 @@ try:
 
 except KeyboardInterrupt:
     print('Interrupted')
-    # Close the stream and PyAudio
+    connection.close()
     plt.ioff()
     stream.stop_stream()
     stream.close()
