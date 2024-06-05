@@ -113,7 +113,7 @@ def data_format(option, audio_data):
         db_spl_inst = 20 * np.log10(rms_y)
         
         if counter2 == 5: #Print every 5 iterations so that the command line doesn't get cluttered too quickly
-            print("Instantaneous A-weighted SPL:", db_spl_inst, "dB")
+            # print("Instantaneous A-weighted SPL:", db_spl_inst, "dB")
             counter2 = 0
         counter2 += 1
         
@@ -185,7 +185,6 @@ if __name__ == '__main__':
     """
     Main function to run the simulated design for the lab nuc and sound card. To be edited later.
     """
-    print("Choosing an option")
     parser = OptionParser()
     
     parser.add_option("-a", "--aFilter", help='Apply a-filter in time domain', default = False, action = 'store_true') # Time-domain implementation
@@ -276,7 +275,6 @@ try:
             # Show history of spectrum with highest peak
             temp = np.average(spectrum)
             if (temp > ave):
-                print("temp is bigger than max")
                 ave = temp
                 line_f2.set_data(freq, spectrum)
 
