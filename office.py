@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
 # Parameters
-CHUNK = 2**13
+CHUNK = 2**14
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
@@ -17,11 +17,14 @@ POWER = 0
 A_FILTER = 1
 titleReceived = 0
 counter = 0
-ave = 0
+ave_ch1 = 0
+ave_ch2 = 0
 counter2 = 0
+counter = 0
 
 #Initialize data buffer
-data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
+data_ch1 = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
+data_ch2 = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
 
 def plots_init(rate, chunk, duration, data):
     """
@@ -63,24 +66,40 @@ def callback(ch, method, properties, body):
     """
     Callback function for handeling received messages from the message broker.
     """
-    global data, plot_title, ylabel, titleReceived, ave, counter2
+    global data_ch1, data_ch2, plot_title, ylabel, titleReceived, ave_ch1, ave_ch2, counter2
 
     # spectrum = np.array(json.loads(body))
     message_data = json.loads(body)
 
     # Check if the message contains spectrum data or plot titles
-    if 'spectrum' in message_data:
+    if 'spectrum_ch1' in message_data:
         # Deserialize JSON string to Python list then convert Python list to NumPy array
-        spectrum = np.array(message_data['spectrum'])
+        spectrum_ch1 = np.array(message_data['spectrum_ch1'])
 
         # Populate/Update Waterfall Plot
-        data = np.roll(data, -1, axis=0)
-        data[-1, :] = spectrum
-        im.set_data(data)
+        data_ch1 = np.roll(data_ch1, -1, axis=0)
+        data_ch1[-1, :] = spectrum_ch1
+        im.set_data(data_ch1)
         im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
 
         # Populate/Update Power vs Frequency Plot
-        line_f1.set_data(freq, spectrum)
+        line_f1.set_data(freq, spectrum_ch1)
+
+        plt.pause(0.05)
+        fig.canvas.flush_events()
+
+    if 'spectrum_ch2' in message_data:
+        # Deserialize JSON string to Python list then convert Python list to NumPy array
+        spectrum_ch2 = np.array(message_data['spectrum_ch2'])
+
+        # Populate/Update Waterfall Plot
+        data_ch2 = np.roll(data_ch2, -1, axis=0)
+        data_ch2[-1, :] = spectrum_ch2
+        im_ch2.set_data(data_ch2)
+        im_ch2.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
+
+        # Populate/Update Power vs Frequency Plot
+        line_f1_ch2.set_data(freq, spectrum_ch2)
 
         plt.pause(0.05)
         fig.canvas.flush_events()
@@ -95,29 +114,24 @@ def callback(ch, method, properties, body):
         fig.suptitle(plot_title, fontsize=16)
         ax_f.set_ylabel(ylabel)
 
-    # Show history of spectrum with highest peak
-    temp = np.average(spectrum)
-    if (temp > ave):
-        ave = temp
-        line_f2.set_data(freq, spectrum)
+    # Show history of spectrum with highest average in the last 20 cycles
+    temp_ch1 = np.average(spectrum_ch1)
+    temp_ch2 = np.average(spectrum_ch2)
 
-    if counter2 >= 20:
-        ave = 0
+    if (temp_ch1 > ave_ch1):
+        ave_ch1 = temp_ch1
+        line_f2.set_data(freq, spectrum_ch1)
+
+    if (temp_ch2 > ave_ch2):
+        ave_ch2 = temp_ch2
+        line_f2_ch2.set_data(freq, spectrum_ch2)
+
+    if counter2 >= 5:
+        ave_ch1 = 0
+        ave_ch2 = 0
         counter2 = 0
 
     counter2 += 1
-
-    # # Populate/Update Waterfall Plot
-    # data = np.roll(data, -1, axis=0)
-    # data[-1, :] = spectrum
-    # im.set_data(data)
-    # im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
-
-    # # Populate/Update Power vs Frequency Plot
-    # line_f1.set_data(freq, spectrum)
-
-    # plt.pause(0.05)
-    # fig.canvas.flush_events()
 
     ch.basic_ack(delivery_tag = method.delivery_tag)
 
@@ -150,7 +164,9 @@ channel.basic_consume(queue=audioBuffer1,
                       on_message_callback=callback)
 
 #Initialize watefall and spectrum plots
-fig, ax, ax_f, im, line_f1, line_f2 = plots_init(RATE, CHUNK, DURATION, data)
+fig, ax, ax_f, im, line_f1, line_f2 = plots_init(RATE, CHUNK, DURATION, data_ch1)
+fig_ch2, ax_ch2, ax_f_ch2, im_ch2, line_f1_ch2, line_f2_ch2 = plots_init(RATE, CHUNK, DURATION, data_ch2)
+
 
 # Calculate frequency axis
 freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0:CHUNK//2]
