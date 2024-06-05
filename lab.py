@@ -5,6 +5,7 @@ import pika
 import json
 import matplotlib.pyplot as plt
 import sys
+import time
 from matplotlib.colors import LogNorm
 from numpy import pi, polymul
 from scipy.signal import bilinear
@@ -12,7 +13,7 @@ from scipy.signal import lfilter
 from optparse import OptionParser
 
 # Parameters
-CHUNK = 2**10
+CHUNK = 2**13
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
@@ -238,6 +239,8 @@ try:
         audio_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
             
         spectrum = data_format(option, audio_data)
+        spectrum= spectrum.astype(np.float32)
+            
         # spectrum_line2 = data_format(option, audio_data)
 
         # =====================================================================
@@ -265,6 +268,8 @@ try:
                             routing_key='',
                             body=message_body
         )
+
+        # time.sleep(0.5)
             
         # =====================================================================
         # PLOTS

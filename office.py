@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
 # Parameters
-CHUNK = 2**10
+CHUNK = 2**13
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
@@ -98,11 +98,10 @@ def callback(ch, method, properties, body):
     # Show history of spectrum with highest peak
     temp = np.average(spectrum)
     if (temp > ave):
-        print("temp is bigger than max")
         ave = temp
         line_f2.set_data(freq, spectrum)
 
-    if counter2 >= 100:
+    if counter2 >= 20:
         ave = 0
         counter2 = 0
 
