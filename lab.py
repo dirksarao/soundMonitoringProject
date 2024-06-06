@@ -13,7 +13,7 @@ from scipy.signal import lfilter
 from optparse import OptionParser
 
 # Parameters
-CHUNK = 2**14
+CHUNK = 2**13
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
@@ -28,6 +28,7 @@ option = A_FILTER_TIME
 ave_ch1 = 0
 ave_ch2 = 0
 flag = 1
+N = 16 #8 is good here
 
 def a_filter(f_bin):
     """
@@ -183,11 +184,16 @@ def plots_init(rate, chunk, duration, data, data_format):
 
     return fig, ax, ax_f, im, line_f1, line_f2
 
+# def calc_average(array_2d):
+#     sum = array_2d
+#     for i in range(len(array_2d)):
+#         sum = sum + array_2d[i]
+
 if __name__ == '__main__':
     """
     Main function to run the simulated design for the lab nuc and sound card. To be edited later.
     """
-    parser = OptionParser()
+    parser = OptionParser()/
     
     parser.add_option("-a", "--aFilter", help='Apply a-filter in time domain', default = False, action = 'store_true') # Time-domain implementation
     parser.add_option("-f", "--freq", help='Apply a-filter in frequency domain', default = False, action = 'store_true')# Frequency domain implementation
@@ -223,8 +229,8 @@ try:
     stream = p.open(format=pyaudio.paInt16, channels=2, rate=RATE, input=True, frames_per_buffer=CHUNK)
 
     #Initialize data buffer
-    data_ch1 = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
-    data_ch2 = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
+    data_ch1 = np.zeros(((RATE * DURATION)// CHUNK, CHUNK//2))
+    data_ch2 = np.zeros(((RATE * DURATION)// CHUNK, CHUNK//2))
 
 
     #Initialize watefall and spectrum plots
@@ -238,6 +244,14 @@ try:
 
     counter = 0
     counter2 = 0
+    buffer_counter = 0
+    buffer_ready = 0
+
+    ch1_buffer = np.zeros((CHUNK,N))
+    ch2_buffer = np.zeros((CHUNK,N))
+
+    # spectrum_ch1 = np.zeros((CHUNK//2))
+    # spectrum_ch2 = np.zeros((CHUNK//2))
 
     while True:
         # Grab Audio Data
@@ -245,86 +259,99 @@ try:
 
         ch1 = audio_data[0::2]
         ch2 = audio_data[1::2]
-            
-        spectrum_ch1 = data_format(option, ch1)
-        spectrum_ch1 = spectrum_ch1.astype(np.float32)
 
-        spectrum_ch2 = data_format(option, ch2)
-        spectrum_ch2 = spectrum_ch2.astype(np.float32)
+        if buffer_counter < N:
+            ch1_buffer[:,buffer_counter] = ch1
+            ch2_buffer[:,buffer_counter] = ch2
+        elif buffer_counter >= N:
+            buffer_counter = 0
+            buffer_ready = 1
 
-        # =====================================================================
-        # NETWORKING
-        # =====================================================================
+            spectrum_ch1 = np.mean(ch1_buffer, axis=1)
+            spectrum_ch2 = np.mean(ch2_buffer, axis=1)
+            # print("SNR before average: ", 10*np.log10(np.mean(ch1)/np.std(ch1)))
+            # print("SNR after average: ", 10*np.log10(np.mean(spectrum_ch1)/np.std(spectrum_ch1)))
 
-        # Convert NumPy array to Python list and serialize the list to JSON
+        if buffer_ready:
+            buffer_ready = 0
 
-        # Prepare message containing plot titles
-        if option == A_FILTER_TIME or option == A_FILTER_FREQ:
-            plot_title = "A-Filtered Spectrum"
-            ylabel = "[dBA]"
-        elif option == 1:
-            plot_title = "Power Spectrum"
-            ylabel = "[dB]"
+            spectrum_ch1 = data_format(option, spectrum_ch1)
+            spectrum_ch1 = spectrum_ch1.astype(np.float32)
 
-        message_body = json.dumps({
-            "spectrum_ch1":spectrum_ch1.tolist(),
-            "spectrum_ch2":spectrum_ch2.tolist(),
-            "plotTitle": plot_title,
-            "ylabel": ylabel
-        })
+            spectrum_ch2 = data_format(option, spectrum_ch2)
+            spectrum_ch2 = spectrum_ch2.astype(np.float32)
 
-        channel.basic_publish(exchange='log',
-                            routing_key='',
-                            body=message_body
-        )
-            
-        # =====================================================================
-        # PLOTS
-        # =====================================================================
+            # =====================================================================
+            # NETWORKING
+            # =====================================================================
 
-        #ch1
-        if isPloting and ((counter)==2):
-            counter = 0
-            # Show history of spectrum with highest peak
-            temp_ch1 = np.average(spectrum_ch1)
-            temp_ch2 = np.average(spectrum_ch2)
+            # Convert NumPy array to Python list and serialize the list to JSON
+
+            # Prepare message containing plot titles
+            if option == A_FILTER_TIME or option == A_FILTER_FREQ:
+                plot_title = "A-Filtered Spectrum"
+                ylabel = "[dBA]"
+            elif option == 1:
+                plot_title = "Power Spectrum"
+                ylabel = "[dB]"
+
+            message_body = json.dumps({
+                "spectrum_ch1":spectrum_ch1.tolist(),
+                "spectrum_ch2":spectrum_ch2.tolist(),
+                "plotTitle": plot_title,
+                "ylabel": ylabel
+            })
+
+            channel.basic_publish(exchange='log',
+                                routing_key='',
+                                body=message_body
+            )
+                
+            # =====================================================================
+            # PLOTS
+            # =====================================================================
+
+            if isPloting:
+                # Show history of spectrum with highest peak
+                temp_ch1 = np.average(spectrum_ch1)
+                temp_ch2 = np.average(spectrum_ch2)
 
 
-            if (temp_ch1 > ave_ch1):
-                ave_ch1 = temp_ch1
-                line_f2.set_data(freq, spectrum_ch1)
+                if (temp_ch1 > ave_ch1):
+                    ave_ch1 = temp_ch1
+                    line_f2.set_data(freq, spectrum_ch1)
 
-            if (temp_ch2 > ave_ch2):
-                ave_ch2 = temp_ch2
-                line_f2_ch2.set_data(freq, spectrum_ch2)
-            
-            if counter2 >= 50:
-                ave_ch1 = 0
-                ave_ch2 = 0
-                counter2 = 0
+                if (temp_ch2 > ave_ch2):
+                    ave_ch2 = temp_ch2
+                    line_f2_ch2.set_data(freq, spectrum_ch2)
+                
+                if counter2 >= 15:
+                    ave_ch1 = 0
+                    ave_ch2 = 0
+                    counter2 = 0
 
-            # Populate/Update Waterfall Plot
-            data_ch1 = np.roll(data_ch1, -1, axis=0)
-            data_ch1[-1, :] = spectrum_ch1
-            data_ch2 = np.roll(data_ch2, -1, axis=0)
-            data_ch2[-1, :] = spectrum_ch2
+                # Populate/Update Waterfall Plot
+                data_ch1 = np.roll(data_ch1, -1, axis=0)
+                data_ch1[-1, :] = spectrum_ch1
+                data_ch2 = np.roll(data_ch2, -1, axis=0)
+                data_ch2[-1, :] = spectrum_ch2
 
-            im.set_data(data_ch1)
-            im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
+                im.set_data(data_ch1)
+                im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
 
-            im_ch2.set_data(data_ch2)
-            im_ch2.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
+                im_ch2.set_data(data_ch2)
+                im_ch2.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
 
-            # Populate/Update Power vs Frequency Plot
-            line_f1.set_data(freq, spectrum_ch1)
-            line_f1_ch2.set_data(freq, spectrum_ch2)
+                # Populate/Update Power vs Frequency Plot
+                line_f1.set_data(freq, spectrum_ch1)
+                line_f1_ch2.set_data(freq, spectrum_ch2)
 
-            # counter2 += 1
-            plt.pause(0.05)
-            fig.canvas.flush_events()
+                counter2 += 1 #basically keeping track of how many buffer_counters are triggered
+                plt.pause(0.05)
+                fig.canvas.flush_events()
 
-        counter2 += 1    
-        counter += 1
+        # counter2 += 1    
+        buffer_counter += 1
 
 except KeyboardInterrupt:
     print('Interrupted')

@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
 # Parameters
-CHUNK = 2**14
+CHUNK = 2**13
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
