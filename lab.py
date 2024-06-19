@@ -39,10 +39,14 @@ ave_ch1 = 0
 ave_ch2 = 0
 flag = 1
 N = 8 #8 is good here
-threshold_A = 0
-threshold_B = 0
-threshold_C = 0
-threshold_D = 0
+threshold_A_ch1 = 1
+threshold_B_ch1 = 1
+threshold_C_ch1 = 1
+threshold_D_ch1 = 1
+threshold_A_ch2 = 1
+threshold_B_ch2 = 1
+threshold_C_ch2 = 1
+threshold_D_ch2 = 1
 new_log_message = ""
 new_size = 0
 log_file = 'log.hdf5'
@@ -399,16 +403,16 @@ try:
                     line_f2_ch2.set_data(freq, temp_ch2)
                     line_f2_ch2.set_color('green')
                     if((temp_ch2>80) and (temp_ch2<90)):
-                        threshold_A = 1
+                        # threshold_A = threshold_A + 1
                         line_f2_ch2.set_color('yellow')
                     if((temp_ch2>90) and (temp_ch2<100)):
-                        threshold_B = 1
+                        # threshold_B = threshold_B + 1
                         line_f2_ch2.set_color('orange')
                     if(temp_ch2>100 and (temp_ch2<110)):
-                        threshold_C = 1
+                        # threshold_C = threshold_C + 1
                         line_f2_ch2.set_color('red')
                     if(temp_ch2>110):
-                        threshold_D = 1
+                        # threshold_D = threshold_D + 1
                         line_f2_ch2.set_color('black')
                 
                 if counter2 >= 15:
@@ -435,24 +439,66 @@ try:
                 # =================================
                 # Data Logging
                 # =================================
+                # This can be changed:
+                #ch1
+                if((temp_ch2>80) and (temp_ch2<90)):
+                    threshold_A_ch1 = threshold_A_ch1 + 1
+                if((temp_ch2>90) and (temp_ch2<100)):
+                    threshold_B_ch1 = threshold_B_ch1 + 1
+                if(temp_ch2>100 and (temp_ch2<110)):
+                    threshold_C_ch1 = threshold_C_ch1 + 1
+                if(temp_ch2>110):
+                    threshold_D_ch1 = threshold_D_ch1 + 1
+
+                #ch2
+                if((temp_ch2>80) and (temp_ch2<90)):
+                    threshold_A_ch2 = threshold_A_ch2 + 1
+                if((temp_ch2>90) and (temp_ch2<100)):
+                    threshold_B_ch2 = threshold_B_ch2 + 1
+                if(temp_ch2>100 and (temp_ch2<110)):
+                    threshold_C_ch2 = threshold_C_ch2 + 1
+                if(temp_ch2>110):
+                    threshold_D_ch2 = threshold_D_ch2 + 1
+
+                #ch1
                 spec_and_freq = np.vstack((spectrum_ch1, freq))
-                if threshold_A:
-                    new_log_message = "lab.py:  80dBA < SPL < 90dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    threshold_A = 0
+                if threshold_A_ch1>=2:
+                    new_log_message = "lab.py: Peak:" + np.max(spectrum_ch1) + "dBA Region: 80dBA < SPL < 90dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     log_message(log_file, new_log_message, spectrum = spec_and_freq)
-                elif threshold_B:
-                    new_log_message = "lab.py:  90dBA < SPL < 100dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    threshold_A_ch1 = 0
+                elif threshold_B_ch1>=2:
+                    new_log_message = "lab.py:" + np.max(spectrum_ch1) + "dBA Region: 90dBA < SPL < 100dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     log_message(log_file, new_log_message, spectrum = spec_and_freq)
-                    threshold_B = 0
-                elif threshold_C:
-                    new_log_message = "lab.py: 100dBA < SPL < 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    threshold_B_ch1 = 0
+                elif threshold_C_ch1>=2:
+                    new_log_message = "lab.py:" + np.max(spectrum_ch1) + "dBA 100dBA < SPL < 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     log_message(log_file, new_log_message, spectrum = spec_and_freq)
-                    threshold_C = 0
-                elif threshold_D:
-                    new_log_message = "lab.py:  SPL > 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    threshold_C_ch1 = 0
+                elif threshold_D_ch1>=2:
+                    new_log_message = "lab.py:" + np.max(spectrum_ch1) + "dBA SPL > 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     log_message(log_file, new_log_message, spectrum = spec_and_freq)
-                    threshold_D = 0
+                    threshold_D_ch1 = 0
+
+                #ch2
+                spec_and_freq = np.vstack((spectrum_ch2, freq))
+                if threshold_A_ch2>=2:
+                    new_log_message = "lab.py: Peak:" + np.max(spectrum_ch2) + "dBA Region: 80dBA < SPL < 90dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_A_ch2 = 0
+                elif threshold_B_ch2>=2:
+                    new_log_message = "lab.py:" + np.max(spectrum_ch2) + "dBA Region: 90dBA < SPL < 100dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_B_ch2 = 0
+                elif threshold_C_ch2>=2:
+                    new_log_message = "lab.py:" + np.max(spectrum_ch2) + "dBA 100dBA < SPL < 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_C_ch2 = 0
+                elif threshold_D_ch2>=2:
+                    new_log_message = "lab.py:" + np.max(spectrum_ch2) + "dBA SPL > 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_D_ch2 = 0
                 
+                #for debugging
                 print_dataset_contents(log_file)
 
 
