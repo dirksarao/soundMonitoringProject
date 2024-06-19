@@ -5,7 +5,9 @@ import os
 import json
 import pika
 import matplotlib.pyplot as plt
+import time
 from matplotlib.colors import LogNorm
+from matplotlib.colors import LinearSegmentedColormap
 
 # Parameters
 CHUNK = 2**13
@@ -41,19 +43,27 @@ def plots_init(rate, chunk, duration, data):
     # Initialize waterfall plot
     fig, (ax, ax_f) = plt.subplots(1,2,figsize=(12, 5))
     data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
-    im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=400))
+
+    positions = [0, 0.67, 0.75, 0.83, 0.92, 1]
+    colors = ['white', 'green', 'yellow', 'orange', 'red', 'black']
+    cmap = LinearSegmentedColormap.from_list('custom_colormap', list(zip(positions, colors)))
+    im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=120), cmap=cmap)
     plt.colorbar(im)
-    ax.set_xlabel('Frequency (Hz)')
-    ax.set_ylabel('Time (s)')
+
+    ax.set_title('Waterfall')
+    ax.set_xlabel('Frequency [Hz]')
+    ax.set_ylabel('Time Elapsed [s]')
+    ax.set_yticks(np.arange(0, DURATION+0.2, 0.2))
+    ax.set_yticklabels([0, 1.5, 1.5*2, 1.5*3, 1.5*4, 1.5*5][::-1])
 
     plt.ion()
 
     # PSD plot setup
     # fig_f, ax_f = plt.subplots()
     ax_f.set_title('SPL vs Frequency')
-    ax_f.set_xlabel('Frequency (Hz)')
+    ax_f.set_xlabel('Frequency [Hz]')
     ax_f.set_ylabel('Power')
-    ax_f.set_ylim(0, 150)
+    ax_f.set_ylim(-40, 150)
 
     x = np.arange(0, CHUNK)
     y_time = np.zeros(CHUNK)
@@ -114,17 +124,39 @@ def callback(ch, method, properties, body):
         fig.suptitle(plot_title, fontsize=16)
         ax_f.set_ylabel(ylabel)
 
+        fig_ch2.suptitle(plot_title, fontsize=16)
+        ax_f_ch2.set_ylabel(ylabel)
+
+
     # Show history of spectrum with highest average in the last 20 cycles
-    temp_ch1 = np.average(spectrum_ch1)
-    temp_ch2 = np.average(spectrum_ch2)
+    temp_ch1 = np.max(spectrum_ch1)
+    temp_ch2 = np.max(spectrum_ch2)
 
     if (temp_ch1 > ave_ch1):
         ave_ch1 = temp_ch1
-        line_f2.set_data(freq, spectrum_ch1)
+        line_f2.set_data(freq, temp_ch1)
+        line_f2.set_color('green')
+        if((temp_ch1>80) and (temp_ch1<90)):
+            line_f2.set_color('yellow')
+        if((temp_ch1>90) and (temp_ch1<100)):
+            line_f2.set_color('orange')
+        if(temp_ch1>100 and (temp_ch1<110)):
+            line_f2.set_color('red')
+        if(temp_ch1>110):
+            line_f2.set_color('black')
 
     if (temp_ch2 > ave_ch2):
         ave_ch2 = temp_ch2
-        line_f2_ch2.set_data(freq, spectrum_ch2)
+        line_f2_ch2.set_data(freq, temp_ch2)
+        line_f2_ch2.set_color('green')
+        if((temp_ch2>80) and (temp_ch2<90)):
+            line_f2_ch2.set_color('yellow')
+        if((temp_ch2>90) and (temp_ch2<100)):
+            line_f2_ch2.set_color('orange')
+        if(temp_ch2>100 and (temp_ch2<110)):
+            line_f2_ch2.set_color('red')
+        if(temp_ch2>110):
+            line_f2_ch2.set_color('black')
 
     if counter2 >= 5:
         ave_ch1 = 0

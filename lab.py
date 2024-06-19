@@ -6,14 +6,23 @@ import json
 import matplotlib.pyplot as plt
 import sys
 import time
+import datetime
+import h5py
+import os
 from matplotlib.colors import LogNorm
 from numpy import pi, polymul
 from scipy.signal import bilinear
 from scipy.signal import lfilter
 from optparse import OptionParser
+from matplotlib.colors import LinearSegmentedColormap
+'''
+Combinations of CHUNK and N that works:
+1. CHUNK = 2**13, N = 8
+2. CHUNK = 2**10, N = 32
+'''
 
 # Parameters
-CHUNK = 2**13
+CHUNK = 2**13 #2**13 is good here
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
@@ -21,6 +30,7 @@ A_FILTER_TIME = 0
 POWER = 1
 A_FILTER_FREQ = 2
 isPloting = False # Change to False to stop program from plotting - for debuggin purposes
+isPrintingSNR = False
 C_FACTOR = 100 # Calibration factor to be changed when calibration takes place.
 MICROPHONE_SENSITIVITY = 12.1*10**(-3)
 REFERENCE_PRESSURE = 20*10**(-6)
@@ -28,7 +38,50 @@ option = A_FILTER_TIME
 ave_ch1 = 0
 ave_ch2 = 0
 flag = 1
-N = 16 #8 is good here
+N = 8 #8 is good here
+threshold_A = 0
+threshold_B = 0
+threshold_C = 0
+threshold_D = 0
+new_log_message = ""
+new_size = 0
+log_file = 'log.hdf5'
+
+def log_message(log_file, dataset_name, spectrum=None):
+    if not os.path.isfile(log_file):
+        # Create the file if it doesn't exist
+        with h5py.File(log_file, 'w'):
+            pass
+
+    with h5py.File(log_file, 'a') as f:
+        # Create dataset for data array if provided
+        if spectrum is not None:
+            f.create_dataset(dataset_name, data=spectrum, dtype=np.float32)
+
+def print_dataset_contents(log_file):
+
+    print("Printing updated message")
+
+    if not os.path.isfile(log_file):
+        print("File '{}' does not exist.".format(log_file))
+        return
+
+    with h5py.File(log_file, 'r') as f:
+        data_arrays = [f[name] for name in f.keys() if not isinstance(f[name], h5py.Group)]
+
+        if len(data_arrays) == 0:
+            print("No data arrays found.")
+
+        print("Dataset names:")
+        for name in f.keys():
+            print("-", name)
+
+        for data_array in data_arrays:
+            print("\nDataset Name:", data_array.name)
+            print(data_array[:])
+        
+    print("Finished printing updated message")
+
 
 def a_filter(f_bin):
     """
@@ -93,46 +146,30 @@ def data_format(option, audio_data):
     Returns: NumPy array of spectrum format of choice
     """
     global counter2
-    #Remove DC by subtracting the mean
     audio_data = audio_data - np.mean(audio_data)
-    #Apply Hamming Window
     audio_data *= np.hamming(CHUNK)
 
     if option == 0:
         # ===================================
-        # TIME-DOMAIN IMPLEMENTATION
+        # TIME-DOMAIN A-FILTER IMPLEMENTATION
         # ===================================
-
         b,a = A_weighting(RATE)
         y = lfilter(b, a, audio_data)
-
         magnitude_spectrum = abs(np.fft.fft(y/(100))[0:CHUNK//2]) #The denominator should be the voltage representation of 20 micropascals and this should be measured during calibration at the moment I am doing guess work here.
-        data = 20 * np.log10(magnitude_spectrum) #A-weighted spl_magnitude_spectrum
-
-        # Calculate RMS of the A-weighted signal
-        rms_y = rms_flat(y)
-
-        # Convert RMS to dB SPL (Sound Pressure Level)
-        db_spl_inst = 20 * np.log10(rms_y)
-        
-        if counter2 == 5: #Print every 5 iterations so that the command line doesn't get cluttered too quickly
-            # print("Instantaneous A-weighted SPL:", db_spl_inst, "dB")
-            counter2 = 0
-        counter2 += 1
-        
+        data = 20 * np.log10(magnitude_spectrum)    
 
     elif option == 1:
-
-        #Perform fft and store single-sided spectrum
+        # ===================================
+        # POWER
+        # ===================================
         magnitude_spectrum = abs(np.fft.fft(audio_data)[0:CHUNK//2])
-
-        data = 10*np.log10(magnitude_spectrum**2)
+        data = 10*np.log10((magnitude_spectrum**2))
 
     elif option == 2:
-        
-        #Perform fft and store single-sided spectrum
+        # ===================================
+        # FREQUENCY-DOMAIN A-FILTER IMPLEMENTATION
+        # ===================================
         magnitude_spectrum = abs(np.fft.fft(audio_data/100)[0:CHUNK//2]) #The denominator should be the voltage representation of 20 micropascals and this should be measured during calibration at the moment I am doing guess work here.
-
         data = 10*np.log10(magnitude_spectrum**2) + a_filter(freq)
 
     else:
@@ -156,11 +193,19 @@ def plots_init(rate, chunk, duration, data, data_format):
     # Initialize waterfall plot
     fig, (ax, ax_f) = plt.subplots(1,2,figsize=(12, 5))
     data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
-    im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=400))
+
+    positions = [0, 0.67, 0.75, 0.83, 0.92, 1]
+    colors = ['white', 'green', 'yellow', 'orange', 'red', 'black']
+    cmap = LinearSegmentedColormap.from_list('custom_colormap', list(zip(positions, colors)))
+    im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=120), cmap=cmap) # vmin = -50, vmax = 120
     plt.colorbar(im)
+
     ax.set_title('Waterfall')
     ax.set_xlabel('Frequency [Hz]')
-    ax.set_ylabel('Time [s]')
+    ax.set_ylabel('Time Elapsed [s]') #This is what it was: Time [s]'
+    # ax.set_yticks([])  # Hide y-axis numbers
+    ax.set_yticks(np.arange(0, DURATION+0.2, 0.2))
+    ax.set_yticklabels([0, 1.45, 1.45*2, 1.45*3, 1.45*4, 1.45*5][::-1]) # [1.921, 1.921+1.45, 1.921+1.45*2, 1.921+1.45*3, 1.921+1.45*4]
 
     plt.ion()
 
@@ -171,10 +216,10 @@ def plots_init(rate, chunk, duration, data, data_format):
 
     if data_format==0 or data_format==2:
         fig.suptitle('A-filtered Spectrum', fontsize=16)  # Set big title
-        ax_f.set_ylabel('[dBA]')
+        ax_f.set_ylabel('SPL [dBA]')
     elif data_format==1:
         fig.suptitle('Power Spectrum', fontsize=16)  # Set big title
-        ax_f.set_ylabel('[dB]')
+        ax_f.set_ylabel('Power [dB]')
 
     x = np.arange(0, CHUNK)
     y_time = np.zeros(CHUNK)
@@ -184,21 +229,17 @@ def plots_init(rate, chunk, duration, data, data_format):
 
     return fig, ax, ax_f, im, line_f1, line_f2
 
-# def calc_average(array_2d):
-#     sum = array_2d
-#     for i in range(len(array_2d)):
-#         sum = sum + array_2d[i]
-
 if __name__ == '__main__':
     """
     Main function to run the simulated design for the lab nuc and sound card. To be edited later.
     """
-    parser = OptionParser()/
+    parser = OptionParser()
     
     parser.add_option("-a", "--aFilter", help='Apply a-filter in time domain', default = False, action = 'store_true') # Time-domain implementation
     parser.add_option("-f", "--freq", help='Apply a-filter in frequency domain', default = False, action = 'store_true')# Frequency domain implementation
     parser.add_option("-p", "--power", help='Display unfiltered power spectrum', default = False, action = 'store_true')
     parser.add_option("-b", "--plot", help='Enable plotting', default = False, action = 'store_true')
+    parser.add_option("-s", "--snr", help='Print SNR', default = False, action = 'store_true')
 
     # 'options' is an object containing values for all of your options - e.g. if --print takes a single string argument, then options.print will be the filename supplied by the user.
     # 'args' is the list of positional arguments leftover after parsing
@@ -206,7 +247,7 @@ if __name__ == '__main__':
     
 try:
 
-    # Menu Interaction
+    # Menu Handeling
     if opts.aFilter:
         option = A_FILTER_TIME
     
@@ -218,6 +259,17 @@ try:
 
     if opts.plot:
         isPloting = True
+
+    if opts.snr:
+        isPrintingSNR = True
+
+    if (opts.snr and opts.aFilter) or (opts.snr and opts.freq):
+        print('SNR (-s) should only be displayed with the power option "-p".')
+        print('Exiting program')
+        exit()
+
+    #Creating the log file if it hasn't been created already
+    log_message(log_file, new_log_message)
 
     # Networking
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
@@ -269,12 +321,9 @@ try:
 
             spectrum_ch1 = np.mean(ch1_buffer, axis=1)
             spectrum_ch2 = np.mean(ch2_buffer, axis=1)
-            # print("SNR before average: ", 10*np.log10(np.mean(ch1)/np.std(ch1)))
-            # print("SNR after average: ", 10*np.log10(np.mean(spectrum_ch1)/np.std(spectrum_ch1)))
 
         if buffer_ready:
             buffer_ready = 0
-
             spectrum_ch1 = data_format(option, spectrum_ch1)
             spectrum_ch1 = spectrum_ch1.astype(np.float32)
 
@@ -290,10 +339,11 @@ try:
             # Prepare message containing plot titles
             if option == A_FILTER_TIME or option == A_FILTER_FREQ:
                 plot_title = "A-Filtered Spectrum"
-                ylabel = "[dBA]"
+                ylabel = "SPL [dBA]"
+
             elif option == 1:
                 plot_title = "Power Spectrum"
-                ylabel = "[dB]"
+                ylabel = "Power [dB]"
 
             message_body = json.dumps({
                 "spectrum_ch1":spectrum_ch1.tolist(),
@@ -306,24 +356,60 @@ try:
                                 routing_key='',
                                 body=message_body
             )
+
+            # SNR calculation of a 1000Hz tone
+            if isPrintingSNR:
+                '''
+                This has to be done with a tone playing at 1000Hz from my mobile phone, because I tested which freq bins contain this spesific signal.
+                I could expand this to automatically pick up a tone, i.e., a peak if need be.
+                '''
+                signal = spectrum_ch1[184:187]
+                p_signal = sum(signal**2)/3 # Average signal power
+                noise = spectrum_ch1
+                noise[range(184,187)] = 0
+                p_noise = sum(noise**2)/(len(noise)-3) # Average noise power
+                snr = 10*np.log10(p_signal/p_noise)
+                print(snr)
                 
             # =====================================================================
             # PLOTS
             # =====================================================================
 
             if isPloting:
-                # Show history of spectrum with highest peak
-                temp_ch1 = np.average(spectrum_ch1)
-                temp_ch2 = np.average(spectrum_ch2)
 
+                # Show history of spectrum with highest peak
+                temp_ch1 = np.max(spectrum_ch1)
+                temp_ch2 = np.max(spectrum_ch2)
 
                 if (temp_ch1 > ave_ch1):
                     ave_ch1 = temp_ch1
-                    line_f2.set_data(freq, spectrum_ch1)
+                    line_f2.set_data(freq, temp_ch1)
+                    line_f2.set_color('green')
+                    if((temp_ch1>80) and (temp_ch1<90)):
+                        line_f2.set_color('yellow')
+                    if((temp_ch1>90) and (temp_ch1<100)):
+                        line_f2.set_color('orange')
+                    if(temp_ch1>100 and (temp_ch1<110)):
+                        line_f2.set_color('red')
+                    if(temp_ch1>110):
+                        line_f2.set_color('black')
 
                 if (temp_ch2 > ave_ch2):
                     ave_ch2 = temp_ch2
-                    line_f2_ch2.set_data(freq, spectrum_ch2)
+                    line_f2_ch2.set_data(freq, temp_ch2)
+                    line_f2_ch2.set_color('green')
+                    if((temp_ch2>80) and (temp_ch2<90)):
+                        threshold_A = 1
+                        line_f2_ch2.set_color('yellow')
+                    if((temp_ch2>90) and (temp_ch2<100)):
+                        threshold_B = 1
+                        line_f2_ch2.set_color('orange')
+                    if(temp_ch2>100 and (temp_ch2<110)):
+                        threshold_C = 1
+                        line_f2_ch2.set_color('red')
+                    if(temp_ch2>110):
+                        threshold_D = 1
+                        line_f2_ch2.set_color('black')
                 
                 if counter2 >= 15:
                     ave_ch1 = 0
@@ -345,6 +431,30 @@ try:
                 # Populate/Update Power vs Frequency Plot
                 line_f1.set_data(freq, spectrum_ch1)
                 line_f1_ch2.set_data(freq, spectrum_ch2)
+  
+                # =================================
+                # Data Logging
+                # =================================
+                spec_and_freq = np.vstack((spectrum_ch1, freq))
+                if threshold_A:
+                    new_log_message = "lab.py:  80dBA < SPL < 90dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    threshold_A = 0
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                elif threshold_B:
+                    new_log_message = "lab.py:  90dBA < SPL < 100dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_B = 0
+                elif threshold_C:
+                    new_log_message = "lab.py: 100dBA < SPL < 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_C = 0
+                elif threshold_D:
+                    new_log_message = "lab.py:  SPL > 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    threshold_D = 0
+                
+                print_dataset_contents(log_file)
+
 
                 counter2 += 1 #basically keeping track of how many buffer_counters are triggered
                 plt.pause(0.05)
