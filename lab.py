@@ -51,39 +51,39 @@ new_log_message = ""
 new_size = 0
 log_file = 'log.hdf5'
 
-def log_message(log_file, dataset_name, spectrum=None):
+def log_message(log_file, dataset_name, group_name, spectrum=None):
     if not os.path.isfile(log_file):
         # Create the file if it doesn't exist
         with h5py.File(log_file, 'w'):
             pass
 
     with h5py.File(log_file, 'a') as f:
+        if group_name not in f:
+            # Create the file if it doesn't exist
+            f.create_group(group_name)
+
         # Create dataset for data array if provided
         if spectrum is not None:
-            f.create_dataset(dataset_name, data=spectrum, dtype=np.float32)
+            f[group_name].create_dataset(dataset_name, data=spectrum, dtype=np.float32)
 
 def print_dataset_contents(log_file):
-
     print("Printing updated message")
 
     if not os.path.isfile(log_file):
-        print("File '{}' does not exist.".format(log_file))
+        print(f"File '{log_file}' does not exist.")
         return
 
     with h5py.File(log_file, 'r') as f:
-        data_arrays = [f[name] for name in f.keys() if not isinstance(f[name], h5py.Group)]
+        print("Group names:")
+        for group_name in f:
+            print("-", group_name)
 
-        if len(data_arrays) == 0:
-            print("No data arrays found.")
+            group = f[group_name]
+            for dataset_name in group:
+                dataset = group[dataset_name]
+                print("\nDataset Name:", dataset.name)
+                print(dataset[:])  # Print dataset values if they are small
 
-        print("Dataset names:")
-        for name in f.keys():
-            print("-", name)
-
-        for data_array in data_arrays:
-            print("\nDataset Name:", data_array.name)
-            print(data_array[:])
-        
     print("Finished printing updated message")
 
 
@@ -273,7 +273,9 @@ try:
         exit()
 
     #Creating the log file if it hasn't been created already
-    log_message(log_file, new_log_message)
+    log_message(log_file, new_log_message, group_name="Channel 1")
+    log_message(log_file, new_log_message, group_name="Channel 2")
+
 
     # Networking
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
@@ -292,8 +294,19 @@ try:
     #Initialize watefall and spectrum plots
     if isPloting:
         fig, ax, ax_f, im, line_f1, line_f2 = plots_init(RATE, CHUNK, DURATION, data_ch1, option) #add parameter for data format
+        if option==0 or option==2:
+            fig.suptitle('A-filtered Spectrum (ch1)', fontsize=16)  # Set big title
+            ax_f.set_ylabel('SPL [dBA]')
+        elif option==1:
+            fig.suptitle('Power Spectrum (ch1)', fontsize=16)  # Set big title
+            ax_f.set_ylabel('Power [dB]')
         fig_ch2, ax_ch2, ax_f_ch2, im_ch2, line_f1_ch2, line_f2_ch2 = plots_init(RATE, CHUNK, DURATION, data_ch2, option) #add parameter for data format
-
+        if option==0 or option==2:
+            fig_ch2.suptitle('A-filtered Spectrum (ch2)', fontsize=16)  # Set big title
+            ax_f_ch2.set_ylabel('SPL [dBA]')
+        elif option==1:
+            fig_ch2.suptitle('Power Spectrum (ch2)', fontsize=16)  # Set big title
+            ax_f_ch2.set_ylabel('Power [dB]')
 
     # Calculate frequency axis
     freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0:CHUNK//2]
@@ -342,17 +355,20 @@ try:
 
             # Prepare message containing plot titles
             if option == A_FILTER_TIME or option == A_FILTER_FREQ:
-                plot_title = "A-Filtered Spectrum"
+                plot_title_ch1 = "A-Filtered Spectrum (ch1)"
+                plot_title_ch2 = "A-Filtered Spectrum (ch2)"
                 ylabel = "SPL [dBA]"
 
             elif option == 1:
-                plot_title = "Power Spectrum"
+                plot_title_ch1 = "Power Spectrum (ch1)"
+                plot_title_ch2 = "Power Spectrum (ch2)"
                 ylabel = "Power [dB]"
 
             message_body = json.dumps({
                 "spectrum_ch1":spectrum_ch1.tolist(),
                 "spectrum_ch2":spectrum_ch2.tolist(),
-                "plotTitle": plot_title,
+                "plotTitle_ch1": plot_title_ch1,
+                "plotTitle_ch2": plot_title_ch2,
                 "ylabel": ylabel
             })
 
@@ -463,40 +479,41 @@ try:
                 #ch1
                 spec_and_freq = np.vstack((spectrum_ch1, freq))
                 if threshold_A_ch1>=2:
-                    new_log_message = "lab.py: Peak:" + np.max(spectrum_ch1) + "dBA Region: 80dBA < SPL < 90dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch1))) + "dBA, REGION:80dBA<SPL<90dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 1", spectrum = spec_and_freq)
                     threshold_A_ch1 = 0
                 elif threshold_B_ch1>=2:
-                    new_log_message = "lab.py:" + np.max(spectrum_ch1) + "dBA Region: 90dBA < SPL < 100dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch1))) + "dBA, REGION:90dBA<SPL<100dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 1", spectrum = spec_and_freq)
                     threshold_B_ch1 = 0
                 elif threshold_C_ch1>=2:
-                    new_log_message = "lab.py:" + np.max(spectrum_ch1) + "dBA 100dBA < SPL < 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch1))) + "dBA, REGION:100dBA<SPL<110dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 1", spectrum = spec_and_freq)
                     threshold_C_ch1 = 0
                 elif threshold_D_ch1>=2:
-                    new_log_message = "lab.py:" + np.max(spectrum_ch1) + "dBA SPL > 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch1))) + "dBA, REGION:SPL>110dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 1", spectrum = spec_and_freq)
                     threshold_D_ch1 = 0
 
                 #ch2
                 spec_and_freq = np.vstack((spectrum_ch2, freq))
                 if threshold_A_ch2>=2:
-                    new_log_message = "lab.py: Peak:" + np.max(spectrum_ch2) + "dBA Region: 80dBA < SPL < 90dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch2))) + "dBA, REGION:80dBA<SPL<90dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 2", spectrum = spec_and_freq)
                     threshold_A_ch2 = 0
                 elif threshold_B_ch2>=2:
-                    new_log_message = "lab.py:" + np.max(spectrum_ch2) + "dBA Region: 90dBA < SPL < 100dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch2))) + "dBA, REGION:90dBA<SPL<100dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 2", spectrum = spec_and_freq)
                     threshold_B_ch2 = 0
                 elif threshold_C_ch2>=2:
-                    new_log_message = "lab.py:" + np.max(spectrum_ch2) + "dBA 100dBA < SPL < 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch2))) + "dBA, REGION:100dBA<SPL<110dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 2", spectrum = spec_and_freq)
                     threshold_C_ch2 = 0
                 elif threshold_D_ch2>=2:
-                    new_log_message = "lab.py:" + np.max(spectrum_ch2) + "dBA SPL > 110dBA @ " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message(log_file, new_log_message, spectrum = spec_and_freq)
+                    new_log_message = "___lab.py:___ PEAK:" + str(int(np.max(spectrum_ch2))) + "dBA, REGION:SPL>110dBA, Date:" + datetime.datetime.now().strftime('%Y-%m-%d') + ", Time:" + datetime.datetime.now().strftime('%H:%M:%S')
+                    log_message(log_file, new_log_message, "Channel 2", spectrum = spec_and_freq)
                     threshold_D_ch2 = 0
+
                 
                 #for debugging
                 print_dataset_contents(log_file)

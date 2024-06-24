@@ -114,19 +114,22 @@ def callback(ch, method, properties, body):
         plt.pause(0.05)
         fig.canvas.flush_events()
 
-    if (titleReceived==0) and ('plotTitle' in message_data):
+    if (titleReceived==0):
         titleReceived = 1
         print("Received plot titles:")
+        if ('plotTitle_ch1' in message_data):
+            plot_title = message_data['plotTitle_ch1']
+            ylabel = message_data['ylabel']
 
-        plot_title = message_data['plotTitle']
-        ylabel = message_data['ylabel']
+            fig.suptitle(plot_title, fontsize=16)
+            ax_f.set_ylabel(ylabel)
 
-        fig.suptitle(plot_title, fontsize=16)
-        ax_f.set_ylabel(ylabel)
+        if ('plotTitle_ch2' in message_data):
+            plot_title = message_data['plotTitle_ch2']
+            ylabel = message_data['ylabel']
 
-        fig_ch2.suptitle(plot_title, fontsize=16)
-        ax_f_ch2.set_ylabel(ylabel)
-
+            fig_ch2.suptitle(plot_title, fontsize=16)
+            ax_f_ch2.set_ylabel(ylabel)
 
     # Show history of spectrum with highest average in the last 20 cycles
     temp_ch1 = np.max(spectrum_ch1)
