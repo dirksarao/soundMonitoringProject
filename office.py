@@ -12,7 +12,7 @@ from matplotlib.colors import LogNorm
 from matplotlib.colors import LinearSegmentedColormap
 
 # Parameters
-CHUNK = 2**11 # was 2**13
+CHUNK = 2**14 # was 2**11
 RATE = 44100
 DURATION = 1  # Duration of the plot in seconds
 NYQUIST_RATE = RATE//2
@@ -25,12 +25,47 @@ ave_ch1 = 0
 ave_ch2 = 0
 counter2 = 0
 counter = 0
+n_streams = 1 # Change when chaning the number of microphones
+
+thresholds = [[0] * 7 for _ in range(n_streams)]
+prev_thresholds = [[0] * 7 for _ in range(n_streams)]
+ave = [0] * n_streams
 
 #Initialize data buffer
 data_ch1 = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
 data_ch2 = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
+data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
 
-def plots_init(rate, chunk, duration, data):
+def boundary_check(spectrum):
+
+    temp = np.max(spectrum)
+
+    colour = "grey"
+    if (temp > 82) and (temp < 85):
+        # A
+        colour = "green"
+    if (temp > 85) and (temp < 88):
+        # B
+        colour = "lightgreen"
+    if (temp > 88) and (temp < 91):
+        # C
+        colour = "yellow"
+    if temp > 91 and (temp < 94):
+        # D
+        colour = "orange"
+    if temp > 94 and (temp < 97):
+        # E
+        colour = "red"
+    if temp > 97 and (temp < 100):
+        # F
+        colour = "darkred"
+    if temp > 100:
+        # G
+        colour = "black"
+
+    return colour
+
+def plots_init(data):
     """
     Initialize a waterfall plot and frequency spectrum plot.
 
@@ -47,18 +82,18 @@ def plots_init(rate, chunk, duration, data):
     data = np.zeros((RATE // CHUNK * DURATION, CHUNK//2))
 
     #positions = [0, 0.67, 0.75, 0.83, 0.92, 1]
-    positions = [0, 0.82, 0.85, 0.88, 0.91, 0.94, 0.97, 1]
+    positions = [0, 0.82, 0.85, 0.88, 0.91, 0.94, 0.97, 1] # [0, 0.82, 0.85, 0.88, 0.91, 0.94, 0.97, 1]
     colors = ['white', 'green', 'lightgreen', 'yellow', 'orange', 'red', 'darkred', 'black']
     #colors = ['white', 'green', 'yellow', 'orange', 'red', 'black']
     cmap = LinearSegmentedColormap.from_list('custom_colormap', list(zip(positions, colors)))
-    im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=100), cmap=cmap)
+    im = ax.imshow(data, aspect='auto', origin='lower', norm=LogNorm(vmin=1, vmax=120), cmap=cmap)
     plt.colorbar(im)
 
     ax.set_title('Waterfall')
     ax.set_xlabel('Frequency [Hz]')
     ax.set_ylabel('Time Elapsed [s]')
     ax.set_yticks(np.arange(0, DURATION+0.2, 0.2))
-    ax.set_yticklabels([0, 1.5, 1.5*2, 1.5*3, 1.5*4, 1.5*5][::-1])
+    ax.set_yticklabels([0, 12, 24, 48, 60, 72][::-1])
 
     plt.ion()
 
@@ -66,11 +101,9 @@ def plots_init(rate, chunk, duration, data):
     # fig_f, ax_f = plt.subplots()
     ax_f.set_title('SPL vs Frequency')
     ax_f.set_xlabel('Frequency [Hz]')
-    ax_f.set_ylabel('Power')
+    ax_f.set_ylabel('SPL [dBA]')
     ax_f.set_ylim(-40, 150)
 
-    x = np.arange(0, CHUNK)
-    y_time = np.zeros(CHUNK)
     line_f1, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
     line_f2, = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
 
@@ -80,94 +113,33 @@ def callback(ch, method, properties, body):
     """
     Callback function for handeling received messages from the message broker.
     """
-    global data_ch1, data_ch2, plot_title, ylabel, titleReceived, ave_ch1, ave_ch2, counter2
+    global data_ch1, data_ch2, plot_title, ylabel, titleReceived, ave_ch1, ave_ch2, counter2, data, ave
 
     # spectrum = np.array(json.loads(body))
-    message_data = json.loads(body)
+    message_data = json.loads(body.decode('utf-8'))
+            
+    for i in range(n_streams):
+        plot_title = message_data[f'plotTitle_ch{i+1}']
+        ylabel = message_data[f"ylabel_ch{i+1}"]
+        spectrum = np.array(message_data[f'spectrum_ch{i+1}'])
 
-    # Check if the message contains spectrum data or plot titles
-    if 'spectrum_ch1' in message_data:
-        # Deserialize JSON string to Python list then convert Python list to NumPy array
-        spectrum_ch1 = np.array(message_data['spectrum_ch1'])
-
-        # Populate/Update Waterfall Plot
-        data_ch1 = np.roll(data_ch1, -1, axis=0)
-        data_ch1[-1, :] = spectrum_ch1
-        im.set_data(data_ch1)
-        im.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
-
-        # Populate/Update Power vs Frequency Plot
-        line_f1.set_data(freq, spectrum_ch1)
+        data = update_plots(data, spectrum, freq, im[i], line_f1[i])
+        fig[i].suptitle(plot_title, fontsize=16)
+        ax[i].set_ylabel(ylabel)
 
         plt.pause(0.05)
-        fig.canvas.flush_events()
+        fig[i].canvas.flush_events()
 
-    if 'spectrum_ch2' in message_data:
-        # Deserialize JSON string to Python list then convert Python list to NumPy array
-        spectrum_ch2 = np.array(message_data['spectrum_ch2'])
+        colour = boundary_check(spectrum)
 
-        # Populate/Update Waterfall Plot
-        data_ch2 = np.roll(data_ch2, -1, axis=0)
-        data_ch2[-1, :] = spectrum_ch2
-        im_ch2.set_data(data_ch2)
-        im_ch2.set_extent([freq[0], freq[-1], 0, DURATION])  # Update x-axis data: Only set the extent along the x-axis
-
-        # Populate/Update Power vs Frequency Plot
-        line_f1_ch2.set_data(freq, spectrum_ch2)
-
-        plt.pause(0.05)
-        fig.canvas.flush_events()
-
-    if (titleReceived==0):
-        titleReceived = 1
-        print("Received plot titles:")
-        if ('plotTitle_ch1' in message_data):
-            plot_title = message_data['plotTitle_ch1']
-            ylabel = message_data['ylabel']
-
-            fig.suptitle(plot_title, fontsize=16)
-            ax_f.set_ylabel(ylabel)
-
-        if ('plotTitle_ch2' in message_data):
-            plot_title = message_data['plotTitle_ch2']
-            ylabel = message_data['ylabel']
-
-            fig_ch2.suptitle(plot_title, fontsize=16)
-            ax_f_ch2.set_ylabel(ylabel)
-
-    # Show history of spectrum with highest average in the last 20 cycles
-    temp_ch1 = np.max(spectrum_ch1)
-    temp_ch2 = np.max(spectrum_ch2)
-
-    if (temp_ch1 > ave_ch1):
-        ave_ch1 = temp_ch1
-        line_f2.set_data(freq, temp_ch1)
-        line_f2.set_color('green')
-        if((temp_ch1>80) and (temp_ch1<90)):
-            line_f2.set_color('yellow')
-        if((temp_ch1>90) and (temp_ch1<100)):
-            line_f2.set_color('orange')
-        if(temp_ch1>100 and (temp_ch1<110)):
-            line_f2.set_color('red')
-        if(temp_ch1>110):
-            line_f2.set_color('black')
-
-    if (temp_ch2 > ave_ch2):
-        ave_ch2 = temp_ch2
-        line_f2_ch2.set_data(freq, temp_ch2)
-        line_f2_ch2.set_color('green')
-        if((temp_ch2>80) and (temp_ch2<90)):
-            line_f2_ch2.set_color('yellow')
-        if((temp_ch2>90) and (temp_ch2<100)):
-            line_f2_ch2.set_color('orange')
-        if(temp_ch2>100 and (temp_ch2<110)):
-            line_f2_ch2.set_color('red')
-        if(temp_ch2>110):
-            line_f2_ch2.set_color('black')
+        temp = np.max(spectrum)
+        if temp > ave[i]:
+            ave[i] = temp
+            line_f2[i].set_data(freq, temp)
+            line_f2[i].set_color(colour) # one colour per stream at any given time 
 
     if counter2 >= 5:
-        ave_ch1 = 0
-        ave_ch2 = 0
+        ave = [0] * n_streams
         counter2 = 0
 
     counter2 += 1
@@ -180,6 +152,19 @@ def callback(ch, method, properties, body):
     #results.sort_stats('time')
     #results.print_stats()
     #exit()
+
+def update_plots(data, spectrum, freq, im, line):
+
+    # Populate/Update Waterfall Plot
+    data = np.roll(data, -1, axis=0)
+    data[-1, :] = spectrum
+    im.set_data(data)
+    im.set_extent([freq[0], freq[-1], 0, DURATION])
+
+    # Populate/Update Power vs Frequency Plot
+    line.set_data(freq, spectrum)
+
+    return data
 
 def reject_unacknowledged_messages():
     while True:
@@ -215,9 +200,16 @@ channel.basic_consume(queue=audioBuffer1,
                       on_message_callback=callback)
 
 #Initialize watefall and spectrum plots
-fig, ax, ax_f, im, line_f1, line_f2 = plots_init(RATE, CHUNK, DURATION, data_ch1)
-fig_ch2, ax_ch2, ax_f_ch2, im_ch2, line_f1_ch2, line_f2_ch2 = plots_init(RATE, CHUNK, DURATION, data_ch2)
 
+fig = [None] * (n_streams)
+ax = [None] * (n_streams)
+ax_f = [None] * (n_streams)
+im = [None] * (n_streams)
+line_f1 = [None] * (n_streams)
+line_f2 = [None] * (n_streams)
+
+for ch_num in range(n_streams):
+    fig[ch_num], ax[ch_num], ax_f[ch_num], im[ch_num], line_f1[ch_num], line_f2[ch_num] = plots_init(data)
 
 # Calculate frequency axis
 freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0:CHUNK//2]

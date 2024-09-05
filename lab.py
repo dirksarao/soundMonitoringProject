@@ -40,6 +40,8 @@ import os
 import cProfile
 import pstats
 import csv
+import threading
+import io
 
 import pyaudio
 import numpy as np
@@ -62,9 +64,9 @@ from matplotlib.colors import LogNorm, LinearSegmentedColormap
 # Calibration factor (C_FACTOR) to be changed when calibration takes place.
 # log_file is actualy directory
 
-CHUNK = 2**11
+CHUNK = 2**14 # 2**11
 RATE = 44100
-DURATION = 1
+DURATION = 8
 NYQUIST_RATE = RATE // 2
 A_FILTER_TIME = 0
 POWER = 1
@@ -75,46 +77,26 @@ C_FACTOR = 100
 MICROPHONE_SENSITIVITY = 12.1 * 10 ** (-3)
 REFERENCE_PRESSURE = 20 * 10 ** (-6)
 option = A_FILTER_TIME
-ave_ch1 = 0
 ave_ch2 = 0
 flag = 1
-N = 64
-threshold_A_ch1 = 0
-threshold_B_ch1 = 0
-threshold_C_ch1 = 0
-threshold_D_ch1 = 0
-threshold_E_ch1 = 0
-threshold_F_ch1 = 0
-threshold_G_ch1 = 0
-threshold_A_ch2 = 0
-threshold_B_ch2 = 0
-threshold_C_ch2 = 0
-threshold_D_ch2 = 0
-threshold_E_ch2 = 0
-threshold_F_ch2 = 0
-threshold_G_ch2 = 0
-prev_th_A_ch1 = 0
-prev_th_B_ch1 = 0
-prev_th_C_ch1 = 0
-prev_th_D_ch1 = 0
-prev_th_E_ch1 = 0
-prev_th_F_ch1 = 0
-prev_th_G_ch1 = 0
-prev_th_A_ch2 = 0
-prev_th_B_ch2 = 0
-prev_th_C_ch2 = 0
-prev_th_D_ch2 = 0
-prev_th_E_ch2 = 0
-prev_th_F_ch2 = 0
-prev_th_G_ch2 = 0
+N = 1 # 64, 5 works on laptop
+
 new_log_message = ""
 new_size = 0
 log_file = "log"
 log_frequency = 2
-colour_ch1 = ""
-colour_ch2 = ""
 counter_n = 0
 start_time = time.monotonic()
+
+n_streams = 1 # Change when chaning the number of microphones
+
+colour = [""] * n_streams
+thresholds = [[0] * 7 for _ in range(n_streams)]
+prev_thresholds = [[0] * 7 for _ in range(n_streams)]
+plot_titles = [[0] * 7 for _ in range(n_streams)]
+ave = [0] * n_streams
+temp = [0] * n_streams
+message_body = {}
 
 
 def write_to_csv(timestamp, cpu_percent):
@@ -152,6 +134,50 @@ def log_message_samples(log_file, dataset_name, group_name, spectrum=None):
     # Get current date
     today = datetime.date.today()
     log_file = os.path.join(log_file, f"log_{today}_N_SAMPLES.hdf5")
+
+    if not os.path.isfile(log_file):
+        # Create the file if it doesn't exist
+        with h5py.File(log_file, "w"):
+            pass
+
+    with h5py.File(log_file, "a") as f:
+        if group_name not in f:
+            # Create the file if it doesn't exist
+            f.create_group(group_name)
+
+        # Create dataset for data array if provided
+        if spectrum is not None:
+            f[group_name].create_dataset(dataset_name, data=spectrum, dtype=np.float32)
+
+def log_message_continuous(log_file, dataset_name, group_name, spectrum=None):
+    """
+    Writes a log message in a directory called "samples" within the "log"
+    directory. It creates the directory if it doesn't exist already.
+
+    Parameters:
+        -   log_file (string): Name of directory containing the sub-directories
+            for logging.
+
+        -   dataset_name (string): Name of the dataset that the new
+            log entry will be written to.
+
+        -   group_name (string): Name of the group that the new log entry will
+            be written to.
+
+        -   spectrum (2D numPy array): Frequency components and Frequencies.
+
+    Returns: void/nothing
+    """
+
+    log_file = os.path.join(log_file, "continuous")
+
+    # Create directory if it doesn't exist
+    if not os.path.exists(log_file):
+        os.makedirs(log_file)
+
+    # Get current date
+    today = datetime.date.today()
+    log_file = os.path.join(log_file, f"log_{today}_continuous.hdf5")
 
     if not os.path.isfile(log_file):
         # Create the file if it doesn't exist
@@ -307,10 +333,13 @@ def process_log_message(
     spectrum,
     freq,
     log_file,
+    thresholds_1D,
+    prev_thresholds,
     N_samples=False,
     time_period=False,
     midnight=False,
-    thresholds=False,
+    thresholds_flag=False,
+    continuous=False
 ):
     """
     Prepares log messages and sets up structures of log directories based on
@@ -337,330 +366,213 @@ def process_log_message(
 
     Returns: void
     """
+    threshold_A = thresholds_1D[0]
+    threshold_B = thresholds_1D[1]
+    threshold_C = thresholds_1D[2]
+    threshold_D = thresholds_1D[3]
+    threshold_E = thresholds_1D[4]
+    threshold_F = thresholds_1D[5]
+    threshold_G = thresholds_1D[6]
 
-    # print("Logging")
-
-    global threshold_A_ch1, threshold_B_ch1, threshold_C_ch1, threshold_D_ch1
-    global threshold_E_ch1, threshold_F_ch1, threshold_G_ch1
-    global threshold_A_ch2, threshold_B_ch2, threshold_C_ch2, threshold_D_ch2
-    global threshold_E_ch2, threshold_F_ch2, threshold_G_ch2
-    global prev_th_A_ch1, prev_th_B_ch1, prev_th_C_ch1, prev_th_D_ch1
-    global prev_th_E_ch1, prev_th_F_ch1, prev_th_G_ch1
-    global prev_th_A_ch2, prev_th_B_ch2, prev_th_C_ch2, prev_th_D_ch2
-    global prev_th_E_ch2, prev_th_F_ch2, prev_th_G_ch2
+    prev_th_A = prev_thresholds[0]
+    prev_th_B = prev_thresholds[1]
+    prev_th_C = prev_thresholds[2]
+    prev_th_D = prev_thresholds[3]
+    prev_th_E = prev_thresholds[4]
+    prev_th_F = prev_thresholds[5]
+    prev_th_G = prev_thresholds[6]
 
     spec_and_freq = np.vstack((spectrum, freq))
 
+    channel_name = f"Channel {channel}"
+
     if N_samples:
-        if channel == 1:
-            channel_name = "Channel 1"
-            new_log_message = (
-                "___lab.py:___ PEAK:"
-                + str(int(np.max(spectrum)))
-                + "dBA, REGION:SPL>100dBA, Date:"
-                + datetime.datetime.now().strftime("%Y-%m-%d")
-                + ", Time:"
-                + datetime.datetime.now().strftime("%H:%M:%S")
-            )
-            log_message_samples(
-                log_file, new_log_message, channel_name, spectrum=spec_and_freq
-            )
-        elif channel == 2:
-            channel_name = "Channel 2"
-            new_log_message = (
-                "___lab.py:___ PEAK:"
-                + str(int(np.max(spectrum)))
-                + "dBA, REGION:SPL>100dBA, Date:"
-                + datetime.datetime.now().strftime("%Y-%m-%d")
-                + ", Time:"
-                + datetime.datetime.now().strftime("%H:%M:%S")
-            )
-            log_message_samples(
-                log_file, new_log_message, channel_name, spectrum=spec_and_freq
-            )
-        else:
-            print("Not a valid channel number")
+        new_log_message = (
+            "___lab.py:___ PEAK:"
+            + str(int(np.max(spectrum)))
+            + ", Date:"
+            + datetime.datetime.now().strftime("%Y-%m-%d")
+            + ", Time:"
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            + '.' + datetime.datetime.now().strftime("%f")[:3]
+        )
+        log_message_samples(
+            log_file, new_log_message, channel_name, spectrum=spec_and_freq
+        )
+
+    if continuous:
+        new_log_message = (
+            "___lab.py:___ PEAK:"
+            + str(int(np.max(spectrum)))
+            + ", Date:"
+            + datetime.datetime.now().strftime("%Y-%m-%d")
+            + ", Time:"
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            + '.' + datetime.datetime.now().strftime("%f")[:3]
+        )
+        log_message_continuous(
+            log_file, new_log_message, channel_name, spectrum=spec_and_freq
+        )
 
     if time_period:
-        if channel == 1:
-            channel_name = "Channel 1"
-            new_log_message = (
-                "___lab.py:___ PEAK:"
-                + str(int(np.max(spectrum)))
-                + "dBA, Date:"
-                + datetime.datetime.now().strftime("%Y-%m-%d")
-                + ", Time:"
-                + datetime.datetime.now().strftime("%H:%M:%S")
-            )
-            log_message_samples(
-                log_file, new_log_message, channel_name, spectrum=spec_and_freq
-            )
-        elif channel == 2:
-            channel_name = "Channel 2"
-            new_log_message = (
-                "___lab.py:___ PEAK:"
-                + str(int(np.max(spectrum)))
-                + "dBA, Date:"
-                + datetime.datetime.now().strftime("%Y-%m-%d")
-                + ", Time:"
-                + datetime.datetime.now().strftime("%H:%M:%S")
-            )
-            log_message_samples(
-                log_file, new_log_message, channel_name, spectrum=spec_and_freq
-            )
-        else:
-            print("Not a valid channel number")
+        new_log_message = (
+            "___lab.py:___ PEAK:"
+            + str(int(np.max(spectrum)))
+            + "dBA, Date:"
+            + datetime.datetime.now().strftime("%Y-%m-%d")
+            + ", Time:"
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            + '.' + datetime.datetime.now().strftime("%f")[:3]
+        )
+        log_message_time(
+            log_file, new_log_message, channel_name, spectrum=spec_and_freq
+        )
 
     if midnight:
-        if channel == 1:
-            channel_name = "Channel 1"
-            new_log_message = (
-                "___lab.py:___ PEAK:"
-                + str(int(np.max(spectrum)))
-                + "dBA, Date:"
-                + datetime.datetime.now().strftime("%Y-%m-%d")
-                + ", Time:"
-                + datetime.datetime.now().strftime("%H:%M:%S")
-            )
-            log_message_samples(
-                log_file, new_log_message, channel_name, spectrum=spec_and_freq
-            )
-        elif channel == 2:
-            channel_name = "Channel 2"
-            new_log_message = (
-                "___lab.py:___ PEAK:"
-                + str(int(np.max(spectrum)))
-                + "dBA, Date:"
-                + datetime.datetime.now().strftime("%Y-%m-%d")
-                + ", Time:"
-                + datetime.datetime.now().strftime("%H:%M:%S")
-            )
-            log_message_samples(
-                log_file, new_log_message, channel_name, spectrum=spec_and_freq
-            )
-        else:
-            print("Not a valid channel number")
+        new_log_message = (
+            "___lab.py:___ PEAK:"
+            + str(int(np.max(spectrum)))
+            + "dBA, Date:"
+            + datetime.datetime.now().strftime("%Y-%m-%d")
+            + ", Time:"
+            + datetime.datetime.now().strftime("%H:%M:%S")
+            + '.' + datetime.datetime.now().strftime("%f")[:3]
+        )
+        log_message_midnight(
+            log_file, new_log_message, channel_name, spectrum=spec_and_freq
+        )
 
-    if thresholds:
-        if channel == 1:
-            channel_name = "Channel 1"
-            if threshold_A_ch1:
-                if not prev_th_A_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:82dBA<SPL<85dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_A_ch1 = threshold_A_ch1
-                threshold_A_ch1 = 0
-            elif threshold_B_ch1:
-                if not prev_th_B_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:85dBA<SPL<88dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_B_ch1 = threshold_B_ch1
-                threshold_B_ch1 = 0
-            elif threshold_C_ch1:
-                if not prev_th_C_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:88dBA<SPL<91dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_C_ch1 = threshold_C_ch1
-                threshold_C_ch1 = 0
-            elif threshold_D_ch1:
-                if not prev_th_D_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:91dBA<SPL<94dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_D_ch1 = threshold_C_ch1
-                threshold_D_ch1 = 0
-            elif threshold_E_ch1:
-                if not prev_th_E_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:94dBA<SPL<97dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_E_ch1 = threshold_E_ch1
-                threshold_E_ch1 = 0
-            elif threshold_F_ch1:
-                if not prev_th_F_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:97dBA<SPL<100dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_F_ch1 = threshold_F_ch1
-                threshold_F_ch1 = 0
-            elif threshold_G_ch1:
-                if not prev_th_G_ch1:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:SPL>100dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_G_ch1 = threshold_G_ch1
-                threshold_G_ch1 = 0
+    if thresholds_flag:
+        if threshold_A:
+            if not prev_th_A:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:82dBA<SPL<85dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_A = threshold_A
+            threshold_A = 0
+        elif threshold_B:
+            if not prev_th_B:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:85dBA<SPL<88dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_B = threshold_B
+            threshold_B = 0
+        elif threshold_C:
+            if not prev_th_C:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:88dBA<SPL<91dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_C = threshold_C
+            threshold_C = 0
+        elif threshold_D:
+            if not prev_th_D:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:91dBA<SPL<94dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_D = threshold_C
+            threshold_D = 0
+        elif threshold_E:
+            if not prev_th_E:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:94dBA<SPL<97dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_E = threshold_E
+            threshold_E = 0
+        elif threshold_F:
+            if not prev_th_F:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:97dBA<SPL<100dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_F = threshold_F
+            threshold_F = 0
+        elif threshold_G:
+            if not prev_th_G:
+                new_log_message = (
+                    "___lab.py:___ PEAK:"
+                    + str(int(np.max(spectrum)))
+                    + "dBA, REGION:SPL>100dBA, Date:"
+                    + datetime.datetime.now().strftime("%Y-%m-%d")
+                    + ", Time:"
+                    + datetime.datetime.now().strftime("%H:%M:%S")
+                    + '.' + datetime.datetime.now().strftime("%f")[:3]
+                )
+                log_message(
+                    log_file, new_log_message, channel_name, spectrum=spec_and_freq
+                )
+            prev_th_G = threshold_G
+            threshold_G = 0
 
-        elif channel == 2:
-            channel_name = "Channel 2"
-            if threshold_A_ch2:
-                if not prev_th_A_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:82dBA<SPL<85dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_A_ch2 = threshold_A_ch2
-                threshold_A_ch2 = 0
-            elif threshold_B_ch2:
-                if not prev_th_B_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:85dBA<SPL<88dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_B_ch2 = threshold_B_ch2
-                threshold_B_ch2 = 0
-            elif threshold_C_ch2:
-                if not prev_th_C_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:88dBA<SPL<91dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
+    thresholds_1D[0] = threshold_A
+    thresholds_1D[1] = threshold_B
+    thresholds_1D[2] = threshold_C
+    thresholds_1D[3] = threshold_D
+    thresholds_1D[4] = threshold_E
+    thresholds_1D[5] = threshold_F
+    thresholds_1D[6] = threshold_G
 
-                    log_message(
-                        log_file, new_log_message, channel_name, pectrum=spec_and_freq
-                    )
-                prev_th_C_ch2 = threshold_C_ch2
-                threshold_C_ch2 = 0
-            elif threshold_D_ch2:
-                if not prev_th_D_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:91dBA<SPL<94dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_D_ch2 = threshold_C_ch2
-                threshold_D_ch2 = 0
-            elif threshold_E_ch2:
-                if not prev_th_E_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:94dBA<SPL<97dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_E_ch2 = threshold_E_ch2
-                threshold_E_ch2 = 0
-            elif threshold_F_ch2:
-                if not prev_th_F_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:97dBA<SPL<100dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_F_ch2 = threshold_F_ch2
-                threshold_F_ch2 = 0
-            elif threshold_G_ch2:
-                if not prev_th_G_ch2:
-                    new_log_message = (
-                        "___lab.py:___ PEAK:"
-                        + str(int(np.max(spectrum)))
-                        + "dBA, REGION:SPL>100dBA, Date:"
-                        + datetime.datetime.now().strftime("%Y-%m-%d")
-                        + ", Time:"
-                        + datetime.datetime.now().strftime("%H:%M:%S")
-                    )
-                    log_message(
-                        log_file, new_log_message, channel_name, spectrum=spec_and_freq
-                    )
-                prev_th_G_ch2 = threshold_G_ch2
-                threshold_G_ch2 = 0
-        else:
-            print("Not a valid channel number")
+    prev_thresholds[0] = prev_th_A
+    prev_thresholds[1] = prev_th_B
+    prev_thresholds[2] = prev_th_C
+    prev_thresholds[3] = prev_th_D
+    prev_thresholds[4] = prev_th_E
+    prev_thresholds[5] = prev_th_F
+    prev_thresholds[6] = prev_th_G
 
+    return thresholds_1D, prev_thresholds
 
 def a_filter(f_bin):
     """
@@ -758,7 +670,7 @@ def data_format(option, audio_data):
 
         b, a = A_weighting(RATE)
         y = lfilter(b, a, audio_data)
-        magnitude_spectrum = abs(np.fft.fft(y / (100))[0 : CHUNK // 2])
+        magnitude_spectrum = abs(np.fft.fft(y / (150))[0 : CHUNK // 2]) # 1
         data = 20 * np.log10(magnitude_spectrum)
 
     elif option == 1:
@@ -786,7 +698,7 @@ def data_format(option, audio_data):
     return data
 
 
-def plots_init(rate, chunk, duration, data, data_format):
+def plots_init(data, option, ch_num):
     """
     Initialize a waterfall plot and frequency spectrum plot.
 
@@ -804,7 +716,7 @@ def plots_init(rate, chunk, duration, data, data_format):
     fig, (ax, ax_f) = plt.subplots(1, 2, figsize=(12, 5))
     data = np.zeros((RATE // CHUNK * DURATION, CHUNK // 2))
 
-    positions = [0, 0.82, 0.85, 0.88, 0.91, 0.94, 0.97, 1]
+    positions = [0, 0.85, 0.88, 0.91, 0.94, 0.97, 0.99, 1] # [0, 0.82, 0.85, 0.88, 0.91, 0.94, 0.97, 1]
     colors = [
         "white",
         "green",
@@ -826,8 +738,17 @@ def plots_init(rate, chunk, duration, data, data_format):
     ax.set_title("Waterfall")
     ax.set_xlabel("Frequency [Hz]")
     ax.set_ylabel("Time Elapsed [s]")
-    ax.set_yticks(np.arange(0, DURATION + 0.2, 0.2))
-    ax.set_yticklabels([0, 1.45, 1.45 * 2, 1.45 * 3, 1.45 * 4, 1.45 * 5][::-1])
+    # ax.set_yticks(np.arange(0, DURATION + 0.2, 0.2))
+    # ax.set_yticklabels([0, 3.24 * 4, 3.24 * 8, 3.24 * 12, round(3.24 * 20, 2), 3.24 * 25][::-1])
+    # ax.set_yticklabels([0, 0.4, 0.8, 1.2, 1.6, 1.8, 2.1, 2.4, 2.8, 3.2, 3.6, 4.0, 4.4, 4.8, 5.2, 5.6, 6.0, 6.4, 6.8, 7.2, 7.6,][::-1])
+    # Set y-tick positions: only show ticks at the bottom and top
+    # Define y-tick positions: bottom, middle, and top
+    yticks_positions = [0, DURATION / 2, DURATION]  # Add middle value
+    ax.set_yticks(yticks_positions)
+
+    # Define y-tick labels corresponding to these positions
+    yticks_labels = [f'{yticks_positions[2]:.1f}', f'{yticks_positions[1]:.1f}', f'{yticks_positions[0]:.1f}']
+    ax.set_yticklabels(yticks_labels)
 
     plt.ion()
 
@@ -836,17 +757,143 @@ def plots_init(rate, chunk, duration, data, data_format):
     ax_f.set_xlabel("Frequency [Hz]")
     ax_f.set_ylim(-40, 150)
 
-    if data_format == 0 or data_format == 2:
-        fig.suptitle("A-filtered Spectrum", fontsize=16)
+    if option == 0 or option == 2:
+        fig.suptitle(f"A-filtered Spectrum (ch{ch_num})", fontsize=16)
         ax_f.set_ylabel("SPL [dBA]")
-    elif data_format == 1:
-        fig.suptitle("Power Spectrum", fontsize=16)
+    elif option == 1:
+        fig.suptitle(f"Power Spectrum (ch{ch_num})", fontsize=16)
         ax_f.set_ylabel("Power [dB]")
 
     (line_f1,) = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
     (line_f2,) = ax_f.plot(np.arange(0, NYQUIST_RATE), np.zeros(NYQUIST_RATE))
 
     return fig, ax, ax_f, im, line_f1, line_f2
+
+
+def read_audio_data(stream, audio_data, index):
+    audio_data[index] = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
+
+def audio_acquisition(streams, buffers):
+    global buffer_counter, buffer_ready
+
+    n_channels = len(streams)  # Number of channels
+    audio_data = np.zeros((n_channels, CHUNK), dtype=np.int16)
+    
+    # Create and start threads for reading audio data
+    threads = []
+    for i, stream in enumerate(streams):
+        thread = threading.Thread(target=read_audio_data, args=(stream, audio_data, i))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Initialize spectra with the correct shape
+    spectra = np.zeros((n_channels, CHUNK), dtype=np.float32)  # Change dtype if needed
+
+    # Process audio data
+    if N == 1:
+        buffer_ready = 1
+        buffer_counter = 0
+        spectra = audio_data
+    else:
+        if buffer_counter < N:
+            for i in range(n_channels):
+                buffers[i][:, buffer_counter] = audio_data[i]
+        elif buffer_counter >= N:
+            buffer_counter = 0
+            buffer_ready = 1
+            for i in range(n_channels):
+                spectra[i] = np.mean(buffers[i], axis=1)
+
+    return spectra
+
+def initialize_pyaudio(n_streams):
+    # CHANGE THIS FUNCTION TO ADD MICROPHONES
+    p = pyaudio.PyAudio()
+    streams = []
+    for i in range(n_streams):
+        # You can specify the input device here when usb
+        # soundcards are plugged in.
+        stream = p.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=RATE,
+            input=True,
+            frames_per_buffer=CHUNK,
+        )
+        streams.append(stream)
+    
+    return streams
+
+def list_audio_devices():
+    p = pyaudio.PyAudio()
+    print("Available audio devices:")
+    for i in range(p.get_device_count()):
+        device_info = p.get_device_info_by_index(i)
+        print(f"Index: {i}, Name: {device_info['name']}, Max Input Channels: {device_info['maxInputChannels']}")
+
+def stop_streams(streams):
+    for stream in streams:
+        try:
+            stream.stop_stream()
+            stream.close()
+        except Exception as e:
+            print(f"Error stopping or closing stream: {e}")
+
+def update_plots(data, spectrum, freq, im, line):
+
+    print(time.time())
+
+
+    # Populate/Update Waterfall Plot
+    data = np.roll(data, -1, axis=0)
+    data[-1, :] = spectrum
+    im.set_data(data)
+    im.set_extent([freq[0], freq[-1], 0, DURATION])
+
+    # Populate/Update Power vs Frequency Plot
+    line.set_data(freq, spectrum)
+
+    return data
+
+def boundary_check(spectrum, thresholds_1D):
+
+    temp = np.max(spectrum)
+
+    colour = "grey"
+    if (temp > 82) and (temp < 85):
+        # A
+        thresholds_1D[0] = 1
+        colour = "green"
+    if (temp > 85) and (temp < 88):
+        # B
+        thresholds_1D[1] = 1
+        colour = "lightgreen"
+    if (temp > 88) and (temp < 91):
+        # C
+        thresholds_1D[2] = 1
+        colour = "yellow"
+    if temp > 91 and (temp < 94):
+        # D
+        thresholds_1D[3] = 1
+        colour = "orange"
+    if temp > 94 and (temp < 97):
+        # E
+        thresholds_1D[4] = 1
+        colour = "red"
+    if temp > 97 and (temp < 100):
+        # F
+        thresholds_1D[5] = 1
+        colour = "darkred"
+    if temp > 100:
+        # G
+        thresholds_1D[6] = 1
+        colour = "black"
+
+    return colour, thresholds_1D
 
 
 if __name__ == "__main__":
@@ -894,6 +941,14 @@ if __name__ == "__main__":
         type="int",
     )
 
+    parser.add_option(
+        "-c",
+        "--logc",
+        help="Logs samples continuously",
+        default=False,
+        action="store_true",
+    )
+
     # 'options' is an object containing values for all of your options - e.g.
     # if --print takes a single string argument, then options.print will be
     # the filename supplied by the user.
@@ -930,51 +985,42 @@ try:
         exit()
 
     # Creating the log file if it hasn't been created already
-    log_message(log_file, new_log_message, group_name="Channel 1")
-    log_message(log_file, new_log_message, group_name="Channel 2")
+    for i in range(n_streams):
+        log_message(log_file, new_log_message, group_name=f"Channel {i+1}")
 
     # Networking
-    credentials = pika.PlainCredentials("nuctwo", "nuctwo")
+    # credentials = pika.PlainCredentials("nuctwo", "nuctwo")
+    # connection = pika.BlockingConnection(
+    #     pika.ConnectionParameters("192.168.10.195", credentials=credentials)
+    # )
     connection = pika.BlockingConnection(
-        pika.ConnectionParameters("192.168.10.195", credentials=credentials)
+        pika.ConnectionParameters("localhost")
     )
     channel = connection.channel()
     channel.exchange_declare(exchange="log", exchange_type="fanout")
 
     # Initialize PyAudio
-    p = pyaudio.PyAudio()
-    stream = p.open(
-        format=pyaudio.paInt16,
-        channels=2,
-        rate=RATE,
-        input=True,
-        frames_per_buffer=CHUNK,
-    )
+    streams = initialize_pyaudio(n_streams)
+    stream_buffers = np.zeros((n_streams, CHUNK, N), dtype=np.int16)
 
     # Initialize data buffer
     data_ch1 = np.zeros(((RATE * DURATION) // CHUNK, CHUNK // 2))
     data_ch2 = np.zeros(((RATE * DURATION) // CHUNK, CHUNK // 2))
+    spectra_formatted = np.zeros((n_streams, CHUNK // 2), dtype=np.float32)
+
+    data_list = [np.zeros(((RATE * DURATION) // CHUNK, CHUNK // 2)) for _ in range(n_streams)]
 
     # Initialize watefall and spectrum plots
+    fig = [None] * (n_streams)
+    ax = [None] * (n_streams)
+    ax_f = [None] * (n_streams)
+    im = [None] * (n_streams)
+    line_f1 = [None] * (n_streams)
+    line_f2 = [None] * (n_streams)
+
     if isPloting:
-        fig, ax, ax_f, im, line_f1, line_f2 = plots_init(
-            RATE, CHUNK, DURATION, data_ch1, option
-        )
-        if option == 0 or option == 2:
-            fig.suptitle("A-filtered Spectrum (ch1)", fontsize=16)
-            ax_f.set_ylabel("SPL [dBA]")
-        elif option == 1:
-            fig.suptitle("Power Spectrum (ch1)", fontsize=16)
-            ax_f.set_ylabel("Power [dB]")
-        fig_ch2, ax_ch2, ax_f_ch2, im_ch2, line_f1_ch2, line_f2_ch2 = plots_init(
-            RATE, CHUNK, DURATION, data_ch2, option
-        )
-        if option == 0 or option == 2:
-            fig_ch2.suptitle("A-filtered Spectrum (ch2)", fontsize=16)
-            ax_f_ch2.set_ylabel("SPL [dBA]")
-        elif option == 1:
-            fig_ch2.suptitle("Power Spectrum (ch2)", fontsize=16)
-            ax_f_ch2.set_ylabel("Power [dB]")
+        for ch_num in range(n_streams):
+            fig[ch_num], ax[ch_num], ax_f[ch_num], im[ch_num], line_f1[ch_num], line_f2[ch_num] = plots_init(data_ch1, option, ch_num+1) # change this "1" later
 
     # Calculate frequency axis
     freq = np.fft.fftfreq(CHUNK, 1 / RATE)[0 : CHUNK // 2]
@@ -984,63 +1030,43 @@ try:
     buffer_counter = 0
     buffer_ready = 0
 
-    ch1_buffer = np.zeros((CHUNK, N))
-    ch2_buffer = np.zeros((CHUNK, N))
+    # ch1_buffer = np.zeros((CHUNK, N))
+    # ch2_buffer = np.zeros((CHUNK, N))
 
     while True:
-
-        # Grab Audio Data
-        audio_data = np.frombuffer(stream.read(CHUNK), dtype=np.int16)
-
-        ch1 = audio_data[0::2]
-        ch2 = audio_data[1::2]
-
-        if buffer_counter < N:
-            ch1_buffer[:, buffer_counter] = ch1
-            ch2_buffer[:, buffer_counter] = ch2
-        elif buffer_counter >= N:
-            buffer_counter = 0
-            buffer_ready = 1
-
-            spectrum_ch1 = np.mean(ch1_buffer, axis=1)
-            spectrum_ch2 = np.mean(ch2_buffer, axis=1)
+        spectra = audio_acquisition(streams, stream_buffers)
+        # Change this to spectra[1] when you add another mic
 
         if buffer_ready:
             buffer_ready = 0
-            spectrum_ch1 = data_format(option, spectrum_ch1)
-            spectrum_ch1 = spectrum_ch1.astype(np.float32)
 
-            spectrum_ch2 = data_format(option, spectrum_ch2)
-            spectrum_ch2 = spectrum_ch2.astype(np.float32)
+            for i in range(n_streams):
+                spectra_formatted[i] = data_format(option, spectra[i])
+                spectra_formatted[i] = spectra_formatted[i].astype(np.float32)
 
-            # ===================================================================
-            # NETWORKING
-            # ===================================================================
+                # ===================================================================
+                # NETWORKING
+                # ===================================================================
 
-            # Convert NumPy array to Python list and serialize the list to JSON
+                # Convert NumPy array to Python list and serialize the list to JSON
 
-            # Prepare message containing plot titles
-            if option == A_FILTER_TIME or option == A_FILTER_FREQ:
-                plot_title_ch1 = "A-Filtered Spectrum (ch1)"
-                plot_title_ch2 = "A-Filtered Spectrum (ch2)"
-                ylabel = "SPL [dBA]"
+                # Prepare message containing plot titles
+                if option == A_FILTER_TIME or option == A_FILTER_FREQ:
+                    plot_title = f"A-Filtered Spectrum (ch{i+1})"
+                    ylabel = "SPL [dBA]"
 
-            elif option == 1:
-                plot_title_ch1 = "Power Spectrum (ch1)"
-                plot_title_ch2 = "Power Spectrum (ch2)"
-                ylabel = "Power [dB]"
+                elif option == 1:
+                    plot_title = f"Power Spectrum (ch{i+1})"
+                    ylabel = "Power [dB]"
 
-            message_body = json.dumps(
-                {
-                    "spectrum_ch1": spectrum_ch1.tolist(),
-                    "spectrum_ch2": spectrum_ch2.tolist(),
-                    "plotTitle_ch1": plot_title_ch1,
-                    "plotTitle_ch2": plot_title_ch2,
-                    "ylabel": ylabel,
-                }
-            )
+                message_body["nth_stream"] = i+1
+                message_body[f"spectrum_ch{i+1}"] = spectra_formatted[i].tolist()
+                message_body[f"plotTitle_ch{i+1}"] = plot_title
+                message_body[f"ylabel_ch{i+1}"] = ylabel
+      
+            message_body_json = json.dumps(message_body)
 
-            channel.basic_publish(exchange="log", routing_key="", body=message_body)
+            channel.basic_publish(exchange="log", routing_key="", body=message_body_json)
 
             # SNR calculation of a 1000Hz tone
             if isPrintingSNR:
@@ -1049,6 +1075,8 @@ try:
                 mobile phone, because I tested which freq bins contain this
                 spesific signal. I could expand this to automatically pick up
                 a tone, i.e., a peak if need be.
+
+                STILL NEEDS TO BE EDITED
                 """
 
                 signal = spectrum_ch1[184:187]
@@ -1064,187 +1092,136 @@ try:
             # =====================================================================
             # PLOTS AND DATA LOGGING
             # =====================================================================
-            temp_ch1 = np.max(spectrum_ch1)
-            temp_ch2 = np.max(spectrum_ch2)
-            # ch1
-            colour_ch1 = "grey"
-            if (temp_ch1 > 82) and (temp_ch1 < 85):
-                threshold_A_ch1 = 1
-                colour_ch1 = "green"
-            if (temp_ch1 > 85) and (temp_ch1 < 88):
-                threshold_B_ch1 = 1
-                colour_ch1 = "lightgreen"
-            if (temp_ch1 > 88) and (temp_ch1 < 91):
-                threshold_C_ch1 = 1
-                colour_ch1 = "yellow"
-            if temp_ch1 > 91 and (temp_ch1 < 94):
-                threshold_D_ch1 = 1
-                colour_ch1 = "orange"
-            if temp_ch1 > 94 and (temp_ch1 < 97):
-                threshold_E_ch1 = 1
-                colour_ch1 = "red"
-            if temp_ch1 > 97 and (temp_ch1 < 100):
-                threshold_F_ch1 = 1
-                colour_ch1 = "darkred"
-            if temp_ch1 > 100:
-                threshold_G_ch1 = 1
-                colour_ch1 = "black"
-
-            # ch2
-            colour_ch2 = "grey"
-            if (temp_ch2 > 82) and (temp_ch2 < 85):
-                threshold_A_ch2 = 1
-                colour_ch2 = "green"
-            if (temp_ch2 > 85) and (temp_ch2 < 88):
-                threshold_B_ch2 = 1
-                colour_ch2 = "lightgreen"
-            if (temp_ch2 > 88) and (temp_ch2 < 91):
-                threshold_C_ch2 = 1
-                colour_ch2 = "yellow"
-            if temp_ch2 > 91 and (temp_ch2 < 94):
-                threshold_D_ch2 = 1
-                colour_ch2 = "orange"
-            if temp_ch2 > 94 and (temp_ch2 < 97):
-                threshold_E_ch2 = 1
-                colour_ch1 = "red"
-            if temp_ch2 > 97 and (temp_ch2 < 100):
-                threshold_F_ch2 = 1
-                colour_ch2 = "darkred"
-            if temp_ch2 > 100:
-                threshold_G_ch2 = 1
-                colour_ch2 = "black"
+            
+            for i in range(n_streams):
+                colour[i], thresholds[i] = boundary_check(spectra_formatted[i], thresholds[i]) # change spectrum_ch1 to be a list later
 
             # ================================================================
             # PLOTS
             # ================================================================
 
             if isPloting:
-
                 # Show history of spectrum with highest peak
 
-                if temp_ch1 > ave_ch1:
-                    ave_ch1 = temp_ch1
-                    line_f2.set_data(freq, temp_ch1)
-                    line_f2.set_color(colour_ch1)
-
-                if temp_ch2 > ave_ch2:
-                    ave_ch2 = temp_ch2
-                    line_f2_ch2.set_data(freq, temp_ch2)
-                    line_f2_ch2.set_color(colour_ch2)
+                for i in range(n_streams):
+                    temp[i] = np.max(spectra_formatted[i])
+                    if temp[i] > ave[i]:
+                        ave[i] = temp[i]
+                        line_f2[i].set_data(freq, temp[i])
+                        line_f2[i].set_color(colour[i]) # one colour per stream at any given time 
 
                 if counter2 >= 15:
-                    ave_ch1 = 0
-                    ave_ch2 = 0
+                    ave = [0] * n_streams
                     counter2 = 0
 
-                # Populate/Update Waterfall Plot
-                data_ch1 = np.roll(data_ch1, -1, axis=0)
-                data_ch1[-1, :] = spectrum_ch1
-                data_ch2 = np.roll(data_ch2, -1, axis=0)
-                data_ch2[-1, :] = spectrum_ch2
+                for i in range(n_streams):
+                    data_list[i] = update_plots(data_list[i], spectra_formatted[i], freq, im[i], line_f1[i]) # spectum/spectra needs work
+                    plt.pause(0.05)
+                    fig[i].canvas.flush_events()
 
-                im.set_data(data_ch1)
-                im.set_extent([freq[0], freq[-1], 0, DURATION])
+                # data_ch2 = update_plots(data_ch2, spectrum_ch2, freq, im_ch2, line_f1_ch2)
 
-                im_ch2.set_data(data_ch2)
-                im_ch2.set_extent([freq[0], freq[-1], 0, DURATION])
+            # =================================
+            # Data Logging
+            # =================================
 
-                # Populate/Update Power vs Frequency Plot
-                line_f1.set_data(freq, spectrum_ch1)
-                line_f1_ch2.set_data(freq, spectrum_ch2)
-
-                # =================================
-                # Data Logging
-                # =================================
-
-                if opts.logn is None and opts.logt is None:
-                    process_log_message(
-                        1, spectrum_ch1, freq, log_file, thresholds=True
+            if opts.logn is None and opts.logt is None:
+                for i in range(n_streams):
+                    thresholds[i], prev_thresholds[i] = process_log_message(
+                        i+1, spectra_formatted[i], freq, log_file,
+                        thresholds[i], prev_thresholds[i], thresholds_flag=True # log_file needs to be changed to mach the list-like thing going on
                     )
-                    process_log_message(
-                        2, spectrum_ch2, freq, log_file, thresholds=True
-                    )
-                # print(opts.logt)
 
-                # Log N samples
-                if opts.logn is not None:
-                    if opts.logn > 0:
-                        if counter_n < opts.logn:
-                            process_log_message(
-                                1, spectrum_ch1, freq, log_file, N_samples=True
+            # Log N samples
+            if opts.logn is not None:
+                if opts.logn > 0:
+                    if counter_n < opts.logn:
+                        for i in range(n_streams):
+                            thresholds[i], prev_thresholds[i] = process_log_message(
+                                i+1, spectra_formatted[i], freq, log_file,
+                                thresholds[i], prev_thresholds[i], N_samples=True
                             )
-                            process_log_message(
-                                2, spectrum_ch2, freq, log_file, N_samples=True
-                            )
-                            counter_n += 1
-                        else:
-                            print("Sample logging has stopped")
-                            # exit program
-                            connection.close()
-                            plt.ioff()
-                            stream.stop_stream()
-                            stream.close()
-                            p.terminate()
-                            exit()
+                        counter_n += 1
                     else:
-                        print("Number of samples must be larger than 0")
+                        print("Sample logging has stopped")
                         # exit program
                         connection.close()
                         plt.ioff()
-                        stream.stop_stream()
-                        stream.close()
-                        p.terminate()
+                        stop_streams(streams)
+                        # stream.stop_stream()
+                        # stream.close()
+                        # p.terminate()
                         exit()
+                else:
+                    print("Number of samples must be larger than 0")
+                    # exit program
+                    connection.close()
+                    plt.ioff()
+                    stop_streams(streams)
+                    # stream.stop_stream()
+                    # stream.close()
+                    # p.terminate()
+                    exit()
 
-                # Log samples within a time period
-                if opts.logt is not None:
-                    if opts.logt > 0:
-                        end_time = time.monotonic()
-                        elapsed_time = end_time - start_time
-                        if elapsed_time < opts.logt:
-                            process_log_message(
-                                1, spectrum_ch1, freq, log_file, time_period=True
+            if opts.logc:
+                for i in range(n_streams):
+                    thresholds[i], prev_thresholds[i] = process_log_message(
+                        i+1, spectra_formatted[i], freq, log_file,
+                        thresholds[i], prev_thresholds[i], continuous=True
+                    )
+
+            # Log samples within a time period
+            if opts.logt is not None:
+                if opts.logt > 0:
+                    end_time = time.monotonic()
+                    elapsed_time = end_time - start_time
+                    if elapsed_time < opts.logt:
+                        for i in range(n_streams):
+                            thresholds[i], prev_thresholds[i] = process_log_message(
+                                i+1, spectra_formatted[i], freq, log_file,
+                                thresholds[i], prev_thresholds[i], time_period=True
                             )
-                            process_log_message(
-                                2, spectrum_ch2, freq, log_file, time_period=True
-                            )
-                        else:
-                            print("Time period logging has stopped")
-                            # exit program
-                            connection.close()
-                            plt.ioff()
-                            stream.stop_stream()
-                            stream.close()
-                            p.terminate()
-                            exit()
                     else:
-                        print("Time must be larger than 0")
+                        print("Time period logging has stopped")
                         # exit program
                         connection.close()
                         plt.ioff()
-                        stream.stop_stream()
-                        stream.close()
-                        p.terminate()
+                        stop_streams(streams)
+                        # stream.stop_stream()
+                        # stream.close()
+                        # p.terminate()
                         exit()
+                else:
+                    print("Time must be larger than 0")
+                    # exit program
+                    connection.close()
+                    plt.ioff()
+                    stop_streams(streams)
+                    # stream.stop_stream()
+                    # stream.close()
+                    # p.terminate()
+                    exit()
 
-                # Take a sample at midnight
-                now = datetime.datetime.now()
-                if (16, 20) == (now.hour, now.minute) and 0 < now.second < 10:
-                    process_log_message(2, spectrum_ch2, freq, log_file, midnight=True)
+            # Take a sample at midnight
+            now = datetime.datetime.now()
+            if (0, 0) == (now.hour, now.minute) and 0 < now.second < 10:
+                for i in range(n_streams):
+                    thresholds[i], prev_thresholds[i] = process_log_message(i+1, spectra_formatted[i], freq, log_file,
+                                        thresholds[i], prev_thresholds[i], midnight=True
+                    )
+
 
                 counter2 += 1
-                plt.pause(0.05)
-                fig.canvas.flush_events()
-
+                
         # counter2 += 1
         buffer_counter += 1
 
 except KeyboardInterrupt:
     # remove this after profiling is done:
-    profile.disable()
-    results = pstats.Stats(profile)
-    results.sort_stats("time")
-    results.print_stats()
+    # profile.disable()
+    # results = pstats.Stats(profile)
+    # results.sort_stats("time")
+    # results.print_stats()
     exit()
     print("Interrupted")
     connection.close()
